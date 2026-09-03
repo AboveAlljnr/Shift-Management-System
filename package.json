@@ -1,0 +1,29 @@
+{
+  "name": "shift-management-system",
+  "version": "0.0.1",
+  "private": true,
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "type-check": "turbo run type-check",
+    "db:generate": "pnpm --filter @sms/api exec prisma generate",
+    "db:migrate": "pnpm --filter @sms/api exec prisma migrate dev",
+    "db:seed": "pnpm --filter @sms/api exec prisma db seed",
+    "db:studio": "pnpm --filter @sms/api exec prisma studio",
+    "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0",
+    "prettier": "^3.3.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}

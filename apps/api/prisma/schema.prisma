@@ -1,0 +1,1531 @@
+// ============================================================
+// Shift Management System — Prisma Schema (V1)
+// PostgreSQL | Multi-company (Tenant Root) | Modular Monolith
+// Canonical Architecture Decisions: ADR-001 through ADR-008
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("DATABASE_SHADOW_URL")
+}
+
+// ============================================================
+// Enums
+// ============================================================
+
+enum CompanyStatus {
+  active
+  suspended
+  trial
+  cancelled
+}
+
+enum UserStatus {
+  active
+  suspended
+  pending_verification
+}
+
+enum MembershipStatus {
+  invited
+  active
+  suspended
+  revoked
+}
+
+enum EmployeeStatus {
+  active
+  inactive
+  on_leave
+  terminated
+}
+
+enum ScopeType {
+  company
+  branch
+  department
+  team
+  self
+}
+
+enum OverrideType {
+  grant
+  revoke
+}
+
+enum ShiftStatus {
+  draft
+  review
+  approved
+  published
+  cancelled
+}
+
+enum ScheduleStatus {
+  draft
+  published
+  locked
+}
+
+enum AssignmentStatus {
+  scheduled
+  confirmed
+  swapped
+  dropped
+  cancelled
+}
+
+enum ConflictSeverity {
+  WARNING
+  BLOCKING
+}
+
+enum SwapRequestStatus {
+  pending
+  accepted
+  rejected
+  cancelled
+  approved
+}
+
+enum OpenShiftStatus {
+  pending
+  approved
+  rejected
+  cancelled
+}
+
+enum OptimizationStatus {
+  pending
+  running
+  completed
+  failed
+  timeout
+}
+
+enum OptimizationPath {
+  interactive
+  async
+}
+
+enum AttendanceRecordStatus {
+  present
+  late
+  absent
+  on_leave
+  holiday
+  day_off
+  missing_clock_in
+  missing_clock_out
+  early_departure
+  overtime
+  half_day
+}
+
+enum AttendanceEventType {
+  clock_in
+  clock_out
+  break_start
+  break_end
+  correction
+  manual_override
+}
+
+enum AttendanceEventSource {
+  mobile
+  web
+  device
+  offline_sync
+}
+
+enum LeaveStatus {
+  pending
+  approved
+  rejected
+  cancelled
+}
+
+enum DocumentStatus {
+  active
+  expired
+  revoked
+}
+
+enum NotificationChannel {
+  in_app
+  email
+  push
+}
+
+enum SubscriptionStatus {
+  trialing
+  active
+  past_due
+  cancelled
+  suspended
+}
+
+enum InvoiceStatus {
+  open
+  paid
+  void
+  uncollectable
+}
+
+enum PaymentStatus {
+  pending
+  succeeded
+  failed
+  refunded
+}
+
+enum OutboxEventStatus {
+  pending
+  processing
+  published
+  failed
+}
+
+// ============================================================
+// Tenant Root: Company (ADR-001)
+// ============================================================
+
+model Company {
+  id           String        @id @default(uuid())
+  name         String
+  slug         String        @unique
+  logoUrl      String?
+  address      String?
+  city         String?
+  state        String?
+  country      String?
+  postalCode   String?
+  timezone     String        @default("UTC")
+  contactEmail String?
+  contactPhone String?
+  industry     String?
+  size         String?
+  status       CompanyStatus @default(active)
+  settings     Json          @default("{}")
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  memberships             CompanyMembership[]
+  employees               Employee[]
+  branches                Branch[]
+  departments             Department[]
+  teams                   Team[]
+  employmentTypes         EmploymentType[]
+  positions               Position[]
+  skills                  Skill[]
+  certifications          Certification[]
+  roles                   Role[]
+  holidays                Holiday[]
+  geofences               Geofence[]
+  schedules               Schedule[]
+  shifts                  Shift[]
+  shiftTemplates          ShiftTemplate[]
+  shiftConflictOverrides  ShiftConflictOverride[]
+  shiftSwapRequests       ShiftSwapRequest[]
+  openShiftRequests       OpenShiftRequest[]
+  optimizationRequests    OptimizationRequest[]
+  attendanceRecords       AttendanceRecord[]
+  attendanceEvents        AttendanceEvent[]
+  leaveTypes              LeaveType[]
+  leaveBalances           LeaveBalance[]
+  leaveRequests           LeaveRequest[]
+  activityTypes           ActivityType[]
+  activities              Activity[]
+  documentCategories      DocumentCategory[]
+  documents               Document[]
+  notifications           Notification[]
+  announcements           Announcement[]
+  subscription            Subscription?
+  invoices                Invoice[]
+  billingEvents           BillingEvent[]
+  auditLogs               AuditLog[]
+  outboxEvents            OutboxEvent[]
+  featureFlags            FeatureFlag[]
+  availabilityRules       AvailabilityRule[]
+  availabilityExceptions  AvailabilityException[]
+
+  @@map("companies")
+}
+
+// ============================================================
+// Identity & Authentication (ADR-002, ADR-004)
+// ============================================================
+
+model User {
+  id                 String     @id @default(uuid())
+  email              String     @unique
+  passwordHash       String
+  name               String
+  status             UserStatus @default(active)
+  emailVerifiedAt    DateTime?
+  twoFactorSecret    String?
+  twoFactorEnabledAt DateTime?
+  lastLoginAt        DateTime?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  memberships                 CompanyMembership[]
+  refreshTokens               RefreshToken[]
+  employees                   Employee[]
+  grantedOverrides            UserPermissionOverride[]    @relation("OverrideGranter")
+  publishedSchedules          ScheduleVersion[]          @relation("SchedulePublisher")
+  uploadedDocuments           DocumentVersion[]          @relation("DocumentUploader")
+  createdAnnouncements        Announcement[]             @relation("AnnouncementAuthor")
+  announcementAcknowledgments AnnouncementAcknowledgment[]
+  notifications               Notification[]
+  reviewedLeaves              LeaveRequest[]             @relation("LeaveReviewer")
+  shiftConflictOverrides      ShiftConflictOverride[]    @relation("ConflictOverrider")
+  attendanceCorrections       AttendanceCorrection[]     @relation("AttendanceCorrector")
+  optimizationRequests        OptimizationRequest[]      @relation("OptimizationRequester")
+
+  @@map("users")
+}
+
+model CompanyMembership {
+  id        String           @id @default(uuid())
+  userId    String
+  companyId String
+  status    MembershipStatus @default(active)
+  invitedAt DateTime         @default(now())
+  joinedAt  DateTime?
+  revokedAt DateTime?
+  revokedBy String?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  user                    User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company                 Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  roles                   UserRole[]
+  permissionOverrides     UserPermissionOverride[]
+  accessScopes            AccessScope[]
+  notificationPreferences NotificationPreference[]
+
+  @@unique([userId, companyId])
+  @@index([companyId])
+  @@map("company_memberships")
+}
+
+model RefreshToken {
+  id               String   @id @default(uuid())
+  userId           String
+  tokenHash        String   @unique
+  membershipId     String?
+  expiresAt        DateTime
+  isRevoked        Boolean  @default(false)
+  deviceIdentifier String?
+  createdAt        DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ============================================================
+// Organization Hierarchy (ADR-003)
+// ============================================================
+
+model Branch {
+  id         String   @id @default(uuid())
+  companyId  String
+  name       String
+  code       String
+  address    String?
+  city       String?
+  state      String?
+  country    String?
+  postalCode String?
+  timezone   String   @default("UTC")
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  departments    Department[]
+  employees      Employee[]
+  shifts         Shift[]
+  shiftTemplates ShiftTemplate[]
+  geofences      Geofence[]
+  holidays       Holiday[]
+  schedules      Schedule[]
+
+  @@unique([companyId, code])
+  @@map("branches")
+}
+
+model Department {
+  id        String   @id @default(uuid())
+  companyId String
+  branchId  String
+  name      String
+  code      String
+  managerId String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch         Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  manager        Employee?       @relation("DepartmentManager", fields: [managerId], references: [id], onDelete: SetNull)
+  teams          Team[]
+  employees      Employee[]      @relation("EmployeeDepartment")
+  positions      Position[]
+  shifts         Shift[]
+  shiftTemplates ShiftTemplate[]
+
+  @@unique([companyId, code])
+  @@map("departments")
+}
+
+model Team {
+  id           String   @id @default(uuid())
+  companyId    String
+  departmentId String
+  name         String
+  code         String
+  managerId    String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  department     Department      @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  manager        Employee?       @relation("TeamManager", fields: [managerId], references: [id], onDelete: SetNull)
+  employees      Employee[]      @relation("EmployeeTeam")
+  shifts         Shift[]
+  shiftTemplates ShiftTemplate[]
+
+  @@unique([companyId, code])
+  @@map("teams")
+}
+
+model EmploymentType {
+  id        String   @id @default(uuid())
+  companyId String
+  name      String
+  code      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employees Employee[]
+
+  @@unique([companyId, code])
+  @@map("employment_types")
+}
+
+model Position {
+  id           String   @id @default(uuid())
+  companyId    String
+  departmentId String?
+  name         String
+  code         String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company           Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  department        Department?        @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  employees         Employee[]
+  shiftRequirements ShiftRequirement[]
+
+  @@unique([companyId, code])
+  @@map("positions")
+}
+
+model Skill {
+  id        String   @id @default(uuid())
+  companyId String
+  name      String
+  code      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company                Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employeeSkills         EmployeeSkill[]
+  shiftRequirementSkills ShiftRequirementSkill[]
+
+  @@unique([companyId, code])
+  @@map("skills")
+}
+
+model Certification {
+  id                 String   @id @default(uuid())
+  companyId          String
+  name               String
+  code               String
+  validityPeriodDays Int?
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  company                        Company                         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employeeCertifications         EmployeeCertification[]
+  shiftRequirementCertifications ShiftRequirementCertification[]
+
+  @@unique([companyId, code])
+  @@map("certifications")
+}
+
+// ============================================================
+// Authorization: Roles, Permissions, Scopes (ADR-003)
+// ============================================================
+
+model Role {
+  id           String   @id @default(uuid())
+  companyId    String?
+  name         String
+  code         String
+  description  String?
+  isSystemRole Boolean  @default(false)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company     Company?         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  permissions RolePermission[]
+  userRoles   UserRole[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  action      String   @unique
+  resource    String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rolePermissions RolePermission[]
+  overrides       UserPermissionOverride[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String   @id @default(uuid())
+  roleId       String
+  permissionId String
+  createdAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  id           String   @id @default(uuid())
+  membershipId String
+  roleId       String
+  createdAt    DateTime @default(now())
+
+  membership CompanyMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  role       Role              @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, roleId])
+  @@map("user_roles")
+}
+
+model UserPermissionOverride {
+  id           String       @id @default(uuid())
+  membershipId String
+  permissionId String
+  type         OverrideType @default(grant)
+  reason       String
+  grantedById  String
+  createdAt    DateTime     @default(now())
+
+  membership CompanyMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  permission Permission        @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  grantedBy  User              @relation("OverrideGranter", fields: [grantedById], references: [id])
+
+  @@unique([membershipId, permissionId])
+  @@map("user_permission_overrides")
+}
+
+model AccessScope {
+  id           String    @id @default(uuid())
+  membershipId String
+  scopeType    ScopeType
+  scopeId      String
+  createdAt    DateTime  @default(now())
+
+  membership CompanyMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@index([membershipId, scopeType, scopeId])
+  @@map("access_scopes")
+}
+
+// ============================================================
+// Workforce / Employee Profile (ADR-002)
+// ============================================================
+
+model Employee {
+  id                    String         @id @default(uuid())
+  companyId             String
+  userId                String?
+  employeeNumber        String
+  firstName             String
+  lastName              String
+  email                 String
+  phone                 String?
+  dateOfBirth           DateTime?      @db.Date
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  employmentTypeId      String
+  branchId              String?
+  departmentId          String?
+  teamId                String?
+  primaryPositionId     String?
+  managerId             String?
+  status                EmployeeStatus @default(active)
+  hireDate              DateTime       @db.Date
+  terminationDate       DateTime?      @db.Date
+  profilePhotoUrl       String?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  company                Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user                   User?                   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  employmentType         EmploymentType          @relation(fields: [employmentTypeId], references: [id])
+  branch                 Branch?                 @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  department             Department?             @relation("EmployeeDepartment", fields: [departmentId], references: [id], onDelete: SetNull)
+  team                   Team?                   @relation("EmployeeTeam", fields: [teamId], references: [id], onDelete: SetNull)
+  primaryPosition        Position?               @relation(fields: [primaryPositionId], references: [id], onDelete: SetNull)
+  manager                Employee?               @relation("EmployeeReports", fields: [managerId], references: [id], onDelete: SetNull)
+  directReports          Employee[]              @relation("EmployeeReports")
+  managedDepartments     Department[]            @relation("DepartmentManager")
+  managedTeams           Team[]                  @relation("TeamManager")
+  availabilityRules      AvailabilityRule[]
+  availabilityExceptions AvailabilityException[]
+  skills                 EmployeeSkill[]
+  certifications         EmployeeCertification[]
+  leaveBalances          LeaveBalance[]
+  leaveRequests          LeaveRequest[]          @relation("EmployeeLeaveRequests")
+  shiftAssignments       ShiftAssignment[]
+  shiftConflictOverrides ShiftConflictOverride[]
+  attendanceRecords      AttendanceRecord[]
+  attendanceEvents       AttendanceEvent[]
+  breaks                 Break[]
+  documents              Document[]
+  activityAssignments    ActivityAssignment[]
+  sentSwapRequests       ShiftSwapRequest[]      @relation("RequestingEmployee")
+  receivedSwapRequests   ShiftSwapRequest[]      @relation("TargetEmployee")
+  openShiftRequests      OpenShiftRequest[]
+
+  @@unique([companyId, employeeNumber])
+  @@index([companyId, status])
+  @@index([companyId, userId])
+  @@map("employees")
+}
+
+model AvailabilityRule {
+  id            String    @id @default(uuid())
+  employeeId    String
+  companyId     String
+  dayOfWeek     Int
+  startTime     String
+  endTime       String
+  isAvailable   Boolean   @default(true)
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("availability_rules")
+}
+
+model AvailabilityException {
+  id          String   @id @default(uuid())
+  employeeId  String
+  companyId   String
+  date        DateTime @db.Date
+  isAvailable Boolean  @default(false)
+  startTime   String?
+  endTime     String?
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("availability_exceptions")
+}
+
+model EmployeeSkill {
+  id               String    @id @default(uuid())
+  employeeId       String
+  skillId          String
+  proficiencyLevel String?
+  verifiedAt       DateTime?
+  verifiedBy       String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  skill    Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, skillId])
+  @@map("employee_skills")
+}
+
+model EmployeeCertification {
+  id              String    @id @default(uuid())
+  employeeId      String
+  certificationId String
+  issuedAt        DateTime
+  expiresAt       DateTime?
+  issuer          String?
+  documentUrl     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  employee      Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  certification Certification @relation(fields: [certificationId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, certificationId])
+  @@map("employee_certifications")
+}
+
+model Holiday {
+  id          String   @id @default(uuid())
+  companyId   String
+  branchId    String?
+  name        String
+  date        DateTime @db.Date
+  isRecurring Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch  Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  @@map("holidays")
+}
+
+model Geofence {
+  id           String   @id @default(uuid())
+  companyId    String
+  branchId     String?
+  name         String
+  latitude     Float
+  longitude    Float
+  radiusMeters Float
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch  Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  @@map("geofences")
+}
+
+// ============================================================
+// Scheduling Engine & Templates (ADR-005, ADR-006)
+// ============================================================
+
+model ShiftTemplate {
+  id           String   @id @default(uuid())
+  companyId    String
+  branchId     String?
+  departmentId String?
+  teamId       String?
+  name         String
+  startTime    String
+  endTime      String
+  notes        String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company    Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch     Branch?     @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  team       Team?       @relation(fields: [teamId], references: [id], onDelete: SetNull)
+
+  @@map("shift_templates")
+}
+
+model Schedule {
+  id          String         @id @default(uuid())
+  companyId   String
+  branchId    String?
+  name        String
+  periodStart DateTime       @db.Date
+  periodEnd   DateTime       @db.Date
+  status      ScheduleStatus @default(draft)
+  createdById String
+  publishedAt DateTime?
+  lockedAt    DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  company  Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch   Branch?           @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  versions ScheduleVersion[]
+  shifts   Shift[]
+
+  @@map("schedules")
+}
+
+model ScheduleVersion {
+  id            String   @id @default(uuid())
+  scheduleId    String
+  versionNumber Int
+  snapshotJson  Json
+  publishedById String
+  publishedAt   DateTime @default(now())
+  notes         String?
+
+  schedule    Schedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  publishedBy User     @relation("SchedulePublisher", fields: [publishedById], references: [id])
+
+  @@unique([scheduleId, versionNumber])
+  @@map("schedule_versions")
+}
+
+model Shift {
+  id             String      @id @default(uuid())
+  companyId      String
+  scheduleId     String?
+  branchId       String
+  departmentId   String?
+  teamId         String?
+  name           String
+  startAt        DateTime
+  endAt          DateTime
+  isOvernight    Boolean     @default(false)
+  isRecurring    Boolean     @default(false)
+  recurrenceRule String?
+  status         ShiftStatus @default(draft)
+  notes          String?
+  attachmentUrls String[]    @default([])
+  publishedAt    DateTime?
+  publishedById  String?
+  approvedAt     DateTime?
+  approvedById   String?
+  lockedAt       DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  company           Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  schedule          Schedule?               @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  branch            Branch                  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  department        Department?             @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  team              Team?                   @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  requirements      ShiftRequirement[]
+  assignments       ShiftAssignment[]
+  conflictOverrides ShiftConflictOverride[]
+  history           ShiftHistory[]
+  swapRequests      ShiftSwapRequest[]
+  openRequests      OpenShiftRequest[]
+
+  @@index([companyId, startAt])
+  @@index([companyId, branchId, startAt])
+  @@index([companyId, status])
+  @@map("shifts")
+}
+
+model ShiftRequirement {
+  id               String  @id @default(uuid())
+  shiftId          String
+  headcount        Int     @default(1)
+  positionId       String?
+  branchConstraint String?
+
+  shift          Shift                           @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  position       Position?                       @relation(fields: [positionId], references: [id], onDelete: SetNull)
+  skills         ShiftRequirementSkill[]
+  certifications ShiftRequirementCertification[]
+
+  @@map("shift_requirements")
+}
+
+model ShiftRequirementSkill {
+  id            String @id @default(uuid())
+  requirementId String
+  skillId       String
+
+  requirement ShiftRequirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+  skill       Skill            @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([requirementId, skillId])
+  @@map("shift_requirement_skills")
+}
+
+model ShiftRequirementCertification {
+  id              String @id @default(uuid())
+  requirementId   String
+  certificationId String
+
+  requirement   ShiftRequirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+  certification Certification    @relation(fields: [certificationId], references: [id], onDelete: Cascade)
+
+  @@unique([requirementId, certificationId])
+  @@map("shift_requirement_certifications")
+}
+
+model ShiftAssignment {
+  id          String           @id @default(uuid())
+  shiftId     String
+  employeeId  String
+  status      AssignmentStatus @default(scheduled)
+  confirmedAt DateTime?
+  notes       String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  shift             Shift              @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  employee          Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  attendanceRecords AttendanceRecord[]
+
+  @@unique([shiftId, employeeId])
+  @@map("shift_assignments")
+}
+
+model ShiftConflictOverride {
+  id             String           @id @default(uuid())
+  companyId      String
+  shiftId        String
+  employeeId     String?
+  ruleIdentifier String
+  severity       ConflictSeverity @default(WARNING)
+  reason         String
+  overriddenById String
+  overriddenAt   DateTime         @default(now())
+  metadata       Json             @default("{}")
+
+  company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shift        Shift     @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  employee     Employee? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  overriddenBy User      @relation("ConflictOverrider", fields: [overriddenById], references: [id])
+
+  @@index([shiftId, employeeId])
+  @@index([companyId, overriddenAt])
+  @@map("shift_conflict_overrides")
+}
+
+model ShiftHistory {
+  id          String   @id @default(uuid())
+  shiftId     String
+  changedById String
+  changeType  String
+  before      Json?
+  after       Json?
+  occurredAt  DateTime @default(now())
+
+  shift Shift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+
+  @@map("shift_history")
+}
+
+model ShiftSwapRequest {
+  id                   String            @id @default(uuid())
+  companyId            String
+  shiftId              String
+  requestingEmployeeId String
+  targetEmployeeId     String?
+  status               SwapRequestStatus @default(pending)
+  reason               String?
+  resolvedById         String?
+  resolvedAt           DateTime?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  company            Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shift              Shift     @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  requestingEmployee Employee  @relation("RequestingEmployee", fields: [requestingEmployeeId], references: [id], onDelete: Cascade)
+  targetEmployee     Employee? @relation("TargetEmployee", fields: [targetEmployeeId], references: [id], onDelete: SetNull)
+
+  @@map("shift_swap_requests")
+}
+
+model OpenShiftRequest {
+  id           String          @id @default(uuid())
+  companyId    String
+  shiftId      String
+  employeeId   String
+  status       OpenShiftStatus @default(pending)
+  resolvedById String?
+  resolvedAt   DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shift    Shift    @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@map("open_shift_requests")
+}
+
+model OptimizationRequest {
+  id             String             @id @default(uuid())
+  companyId      String
+  requestedById  String
+  parameters     Json
+  status         OptimizationStatus @default(pending)
+  path           OptimizationPath   @default(interactive)
+  idempotencyKey String             @unique
+  resultJson     Json?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  requestedBy User    @relation("OptimizationRequester", fields: [requestedById], references: [id])
+
+  @@map("optimization_requests")
+}
+
+// ============================================================
+// Attendance (Normalized Record + Immutable Events + Corrections)
+// ============================================================
+
+model AttendanceRecord {
+  id                 String                 @id @default(uuid())
+  companyId          String
+  employeeId         String
+  shiftAssignmentId  String?
+  workDate           DateTime               @db.Date
+  status             AttendanceRecordStatus @default(present)
+  effectiveClockIn   DateTime?
+  effectiveClockOut  DateTime?
+  totalWorkedMinutes Int                    @default(0)
+  totalBreakMinutes  Int                    @default(0)
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  company         Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee        Employee               @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shiftAssignment ShiftAssignment?       @relation(fields: [shiftAssignmentId], references: [id], onDelete: SetNull)
+  events          AttendanceEvent[]
+  breaks          Break[]
+  corrections     AttendanceCorrection[]
+
+  @@unique([employeeId, workDate])
+  @@index([companyId, workDate])
+  @@map("attendance_records")
+}
+
+model AttendanceEvent {
+  id                 String                @id @default(uuid())
+  attendanceRecordId String
+  companyId          String
+  employeeId         String
+  eventType          AttendanceEventType
+  clientOccurredAt   DateTime
+  serverReceivedAt   DateTime              @default(now())
+  source             AttendanceEventSource @default(mobile)
+  deviceIdentifier   String?
+  idempotencyKey     String                @unique
+  latitude           Float?
+  longitude          Float?
+  geofenceResult     String?
+  metadata           Json                  @default("{}")
+
+  attendanceRecord AttendanceRecord @relation(fields: [attendanceRecordId], references: [id], onDelete: Cascade)
+  company          Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee         Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId, clientOccurredAt])
+  @@index([companyId, clientOccurredAt])
+  @@map("attendance_events")
+}
+
+model Break {
+  id                 String    @id @default(uuid())
+  attendanceRecordId String
+  employeeId         String
+  startAt            DateTime
+  endAt              DateTime?
+  durationMinutes    Int       @default(0)
+  isPaid             Boolean   @default(false)
+  source             String    @default("manual")
+  createdAt          DateTime  @default(now())
+
+  attendanceRecord AttendanceRecord @relation(fields: [attendanceRecordId], references: [id], onDelete: Cascade)
+  employee         Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@map("breaks")
+}
+
+model AttendanceCorrection {
+  id                 String   @id @default(uuid())
+  attendanceRecordId String
+  correctedById      String
+  field              String
+  previousValue      String?
+  newValue           String?
+  reason             String
+  occurredAt         DateTime @default(now())
+
+  attendanceRecord AttendanceRecord @relation(fields: [attendanceRecordId], references: [id], onDelete: Cascade)
+  correctedBy      User             @relation("AttendanceCorrector", fields: [correctedById], references: [id])
+
+  @@map("attendance_corrections")
+}
+
+// ============================================================
+// Leave & Activities
+// ============================================================
+
+model LeaveType {
+  id                    String   @id @default(uuid())
+  companyId             String
+  name                  String
+  code                  String
+  isPaid                Boolean  @default(true)
+  defaultEntitlementDays Float    @default(0)
+  carryOverLimit        Float    @default(0)
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  company  Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  balances LeaveBalance[]
+  requests LeaveRequest[]
+
+  @@unique([companyId, code])
+  @@map("leave_types")
+}
+
+model LeaveBalance {
+  id              String   @id @default(uuid())
+  companyId       String
+  employeeId      String
+  leaveTypeId     String
+  year            Int
+  entitlementDays Float    @default(0)
+  usedDays        Float    @default(0)
+  pendingDays     Float    @default(0)
+  remainingDays   Float    @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee  Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, leaveTypeId, year])
+  @@map("leave_balances")
+}
+
+model LeaveRequest {
+  id            String      @id @default(uuid())
+  companyId     String
+  employeeId    String
+  leaveTypeId   String
+  startDate     DateTime    @db.Date
+  endDate       DateTime    @db.Date
+  requestedDays Float
+  status        LeaveStatus @default(pending)
+  reason        String?
+  reviewedById  String?
+  reviewedAt    DateTime?
+  reviewNote    String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  company    Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee   Employee  @relation("EmployeeLeaveRequests", fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType  LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+  reviewedBy User?     @relation("LeaveReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status, startDate])
+  @@index([employeeId])
+  @@map("leave_requests")
+}
+
+model ActivityType {
+  id                    String   @id @default(uuid())
+  companyId             String
+  name                  String
+  code                  String
+  countsTowardHours     Boolean  @default(true)
+  blocksShifts          Boolean  @default(true)
+  requiresClockIn       Boolean  @default(false)
+  countsTowardOvertime  Boolean  @default(false)
+  allowsEmployeeRequest Boolean  @default(false)
+  requiresApproval      Boolean  @default(true)
+  isRecurring           Boolean  @default(false)
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  company    Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  activities Activity[]
+
+  @@unique([companyId, code])
+  @@map("activity_types")
+}
+
+model Activity {
+  id             String   @id @default(uuid())
+  companyId      String
+  activityTypeId String
+  name           String
+  description    String?
+  startAt        DateTime
+  endAt          DateTime
+  recurrenceRule String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  company      Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  activityType ActivityType         @relation(fields: [activityTypeId], references: [id], onDelete: Cascade)
+  assignments  ActivityAssignment[]
+
+  @@map("activities")
+}
+
+model ActivityAssignment {
+  id         String   @id @default(uuid())
+  activityId String
+  employeeId String
+  status     String   @default("assigned")
+  createdAt  DateTime @default(now())
+
+  activity Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([activityId, employeeId])
+  @@map("activity_assignments")
+}
+
+// ============================================================
+// Documents & Communication
+// ============================================================
+
+model DocumentCategory {
+  id        String   @id @default(uuid())
+  companyId String
+  name      String
+  code      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  documents Document[]
+
+  @@unique([companyId, code])
+  @@map("document_categories")
+}
+
+model Document {
+  id         String         @id @default(uuid())
+  companyId  String
+  employeeId String?
+  categoryId String
+  name       String
+  expiresAt  DateTime?
+  status     DocumentStatus @default(active)
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  company  Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee?          @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  category DocumentCategory  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  versions DocumentVersion[]
+
+  @@index([employeeId, expiresAt])
+  @@index([companyId, status])
+  @@map("documents")
+}
+
+model DocumentVersion {
+  id            String   @id @default(uuid())
+  documentId    String
+  versionNumber Int
+  s3Key         String
+  fileSizeBytes Int
+  uploadedById  String
+  uploadedAt    DateTime @default(now())
+
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  uploadedBy User     @relation("DocumentUploader", fields: [uploadedById], references: [id])
+
+  @@unique([documentId, versionNumber])
+  @@map("document_versions")
+}
+
+model Notification {
+  id                String              @id @default(uuid())
+  companyId         String
+  recipientId       String
+  channel           NotificationChannel @default(in_app)
+  eventType         String
+  title             String
+  body              String
+  relatedEntityType String?
+  relatedEntityId   String?
+  isRead            Boolean             @default(false)
+  readAt            DateTime?
+  deliveryStatus    String              @default("pending")
+  deliveredAt       DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  recipient User    @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, isRead, createdAt])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  id           String              @id @default(uuid())
+  membershipId String
+  channel      NotificationChannel
+  eventType    String
+  isEnabled    Boolean             @default(true)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  membership CompanyMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, channel, eventType])
+  @@map("notification_preferences")
+}
+
+model Announcement {
+  id            String    @id @default(uuid())
+  companyId     String
+  authorId      String
+  title         String
+  body          String
+  targetScope   ScopeType @default(company)
+  targetScopeId String?
+  publishedAt   DateTime  @default(now())
+  expiresAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  company         Company                      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  author          User                         @relation("AnnouncementAuthor", fields: [authorId], references: [id])
+  acknowledgments AnnouncementAcknowledgment[]
+
+  @@map("announcements")
+}
+
+model AnnouncementAcknowledgment {
+  id             String   @id @default(uuid())
+  announcementId String
+  userId         String
+  acknowledgedAt DateTime @default(now())
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, userId])
+  @@map("announcement_acknowledgments")
+}
+
+// ============================================================
+// Billing (ADR-008: Active Employee Count Basis)
+// ============================================================
+
+model SubscriptionPlan {
+  id           String   @id @default(uuid())
+  name         String
+  code         String   @unique
+  maxEmployees Int
+  priceMonthly Float
+  priceYearly  Float
+  features     Json     @default("{}")
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@map("subscription_plans")
+}
+
+model Subscription {
+  id                     String             @id @default(uuid())
+  companyId              String             @unique
+  planId                 String
+  status                 SubscriptionStatus @default(trialing)
+  currentPeriodStart     DateTime
+  currentPeriodEnd       DateTime
+  trialEndsAt            DateTime?
+  providerSubscriptionId String?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  company       Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  plan          SubscriptionPlan @relation(fields: [planId], references: [id])
+  invoices      Invoice[]
+  billingEvents BillingEvent[]
+
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id                String        @id @default(uuid())
+  subscriptionId    String
+  companyId         String
+  periodStart       DateTime
+  periodEnd         DateTime
+  amountDue         Float
+  amountPaid        Float         @default(0)
+  currency          String        @default("USD")
+  status            InvoiceStatus @default(open)
+  providerInvoiceId String?
+  dueAt             DateTime
+  paidAt            DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  payments     Payment[]
+
+  @@map("invoices")
+}
+
+model Payment {
+  id                String        @id @default(uuid())
+  invoiceId         String
+  amount            Float
+  currency          String        @default("USD")
+  status            PaymentStatus @default(pending)
+  providerPaymentId String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  invoice  Invoice          @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  attempts PaymentAttempt[]
+
+  @@map("payments")
+}
+
+model PaymentAttempt {
+  id            String   @id @default(uuid())
+  paymentId     String
+  attemptNumber Int
+  status        String
+  failureReason String?
+  attemptedAt   DateTime @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@map("payment_attempts")
+}
+
+model BillingEvent {
+  id             String   @id @default(uuid())
+  subscriptionId String
+  companyId      String
+  eventType      String
+  payload        Json
+  occurredAt     DateTime @default(now())
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("billing_events")
+}
+
+model ProviderWebhookEvent {
+  id          String    @id @default(uuid())
+  provider    String
+  eventId     String
+  eventType   String
+  payload     Json
+  processedAt DateTime?
+  status      String    @default("pending")
+  createdAt   DateTime  @default(now())
+
+  @@unique([provider, eventId])
+  @@map("provider_webhook_events")
+}
+
+// ============================================================
+// Platform Infrastructure: Audit, Outbox, Flags
+// ============================================================
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  companyId  String?
+  actorId    String?
+  actorEmail String?
+  action     String
+  resource   String
+  resourceId String?
+  before     Json?
+  after      Json?
+  ipAddress  String?
+  userAgent  String?
+  requestId  String?
+  occurredAt DateTime @default(now())
+
+  company Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, occurredAt])
+  @@index([resource, resourceId])
+  @@map("audit_logs")
+}
+
+model OutboxEvent {
+  id          String            @id @default(uuid())
+  companyId   String?
+  eventType   String
+  payload     Json
+  status      OutboxEventStatus @default(pending)
+  attempts    Int               @default(0)
+  processedAt DateTime?
+  error       String?
+  createdAt   DateTime          @default(now())
+
+  company Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@map("outbox_events")
+}
+
+model FeatureFlag {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  description String?
+  isEnabled   Boolean  @default(false)
+  companyId   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("feature_flags")
+}
+
+model MaintenanceWindow {
+  id              String   @id @default(uuid())
+  description     String
+  startAt         DateTime
+  endAt           DateTime
+  affectedSystems String[]
+  createdAt       DateTime @default(now())
+
+  @@map("maintenance_windows")
+}
