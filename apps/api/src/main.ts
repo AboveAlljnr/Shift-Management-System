@@ -1,4 +1,4 @@
-import { ValidationPipe, VersioningType } from '@nestjs/common';
+import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -8,11 +8,25 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
+import { jsonLogger } from './common/observability/json-logger';
 
 async function bootstrap() {
+  // Structured JSON logging for the whole process (HIGH #7). overrideLogger makes every
+  // `Logger` instance (services, guards, filters) emit structured, correlation-tagged JSON.
+  Logger.overrideLogger(jsonLogger);
+
   const app = await NestFactory.create(AppModule, {
-    logger: ['log', 'error', 'warn', 'debug'],
+    logger: jsonLogger,
   });
+
+  const logger = new Logger('Bootstrap');
+
+  // Graceful shutdown (HIGH #4): on SIGTERM/SIGINT Nest runs the application lifecycle hooks
+  // (beforeApplicationShutdown -> onApplicationShutdown -> onModuleDestroy), which closes the
+  // HTTP/WebSocket listeners and lets Prisma/Bull/ioredis disconnect cleanly. Must be enabled
+  // before listen(). See apps/api/src/infrastructure/database/prisma.service.ts and
+  // apps/api/src/infrastructure/redis/redis.module.ts.
+  app.enableShutdownHooks();
 
   const configService = app.get(ConfigService);
   const port = configService.get<number>('APP_PORT', 3001);
@@ -72,8 +86,8 @@ async function bootstrap() {
   }
 
   await app.listen(port);
-  console.log(`\n🚀  API running at http://localhost:${port}/api/v1`);
-  console.log(`📖  Swagger docs at http://localhost:${port}/api/docs\n`);
+  logger.log(`API running at http://localhost:${port}/api/v1`, 'Bootstrap');
+  logger.log(`Swagger docs at http://localhost:${port}/api/docs`, 'Bootstrap');
 }
 
 bootstrap();

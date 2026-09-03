@@ -40,7 +40,11 @@ function createDeps() {
     sign: vi.fn((_p: unknown) => 'signed-access-token'),
   };
   const configService = {
-    get: vi.fn((_key: string, fallback?: string) => fallback),
+    get: vi.fn((key: string, fallback?: string) => {
+      // No hidden fallback secrets — provide explicit JWT secrets the service reads.
+      if (key === 'JWT_REFRESH_SECRET') return 'test-refresh-secret';
+      return fallback;
+    }),
   };
   const audit = {
     record: vi.fn(async () => ({})),
@@ -105,7 +109,10 @@ describe('AuthService', () => {
     audit.record.mockResolvedValue({});
     user.update.mockResolvedValue({});
     refreshToken.create.mockResolvedValue({});
-    configService.get.mockImplementation((_k: string, fallback?: string) => fallback);
+    configService.get.mockImplementation((key: string, fallback?: string) => {
+      if (key === 'JWT_REFRESH_SECRET') return 'test-refresh-secret';
+      return fallback;
+    });
 
     const result = await service.login({ email: 'a@b.co', password: 'pw' });
 
@@ -153,7 +160,12 @@ describe('AuthService — register', () => {
 
   function createRegisterDeps() {
     const jwtService = { sign: vi.fn(() => 'signed-access-token') };
-    const configService = { get: vi.fn((_k: string, fallback?: string) => fallback) };
+    const configService = {
+      get: vi.fn((key: string, fallback?: string) => {
+        if (key === 'JWT_REFRESH_SECRET') return 'test-refresh-secret';
+        return fallback;
+      }),
+    };
     const audit = { record: vi.fn(async () => ({})) };
     const refreshToken = { create: vi.fn().mockResolvedValue({}) };
     const permission = { findMany: vi.fn().mockResolvedValue([{ id: 'p1' }, { id: 'p2' }]) };

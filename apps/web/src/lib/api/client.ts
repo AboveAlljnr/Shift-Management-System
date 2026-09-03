@@ -1,6 +1,10 @@
 import axios, { AxiosError } from 'axios';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+// API base URL is explicitly environment-driven. NEXT_PUBLIC_API_URL is inlined at build
+// time. It MUST be provided for production/staging builds (see next.config.js guard); the
+// fallback here is for local development only and points at the actual dev API port (3001),
+// NOT a silent production default.
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 export const apiClient = axios.create({
   baseURL: `${API_BASE}/api/v1`,

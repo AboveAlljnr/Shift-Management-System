@@ -5,7 +5,11 @@ import { JwtStrategy } from './jwt.strategy';
 
 function createConfig() {
   return {
-    get: vi.fn((key: string, fallback?: string) => fallback),
+    get: vi.fn((key: string, fallback?: string) => {
+      // The strategy requires an explicit JWT_ACCESS_SECRET (never a hidden fallback).
+      if (key === 'JWT_ACCESS_SECRET') return 'test-access-secret';
+      return fallback;
+    }),
   };
 }
 

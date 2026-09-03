@@ -90,6 +90,9 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        # Inlined into the client bundle at build time; required by the Dockerfile guard.
+        NEXT_PUBLIC_API_URL: http://localhost:3001
     container_name: sms-web
     restart: unless-stopped
     depends_on:

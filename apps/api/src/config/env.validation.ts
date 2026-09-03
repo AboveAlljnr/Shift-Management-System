@@ -31,6 +31,11 @@ const common = z.object({
   REDIS_URL: redisUrl.default('redis://localhost:6379'),
   // CORS: comma-separated list of allowed browser origins. Empty list === deny all origins.
   ALLOWED_ORIGINS: z.string().default(''),
+  // Startup DB-connect resilience (HIGH #5). Operational tuning, optional; bounded & clamped
+  // by the retrier so a typo cannot cause an unbounded retry loop.
+  DB_CONNECT_MAX_RETRIES: z.coerce.number().int().min(1).max(60).optional(),
+  DB_CONNECT_INITIAL_DELAY_MS: z.coerce.number().int().min(1).max(60000).optional(),
+  DB_CONNECT_MAX_DELAY_MS: z.coerce.number().int().min(1).max(300000).optional(),
 });
 
 /**

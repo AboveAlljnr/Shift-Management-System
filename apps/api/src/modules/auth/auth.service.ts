@@ -345,7 +345,7 @@ export class AuthService {
     const accessToken = this.jwtService.sign(payload);
 
     const refreshExpiresIn = this.configService.get<string>('JWT_REFRESH_EXPIRES_IN', '7d');
-    const refreshSecret = this.configService.get<string>('JWT_REFRESH_SECRET', 'refresh-secret');
+    const refreshSecret = this.configService.get<string>('JWT_REFRESH_SECRET');
     const rawRefreshToken = this.jwtService.sign(
       { ...payload, jti: randomBytes(16).toString('hex') },
       {

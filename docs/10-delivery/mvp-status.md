@@ -343,3 +343,185 @@ shutdown/startup resilience of the container — does not exist and must be crea
 staging.** Of the 20 findings: **3 blockers, 5 high, 5 medium, 3 low, 4 accepted.** No product
 features were added; no AWS resources were created; the application architecture was not
 modified.
+
+---
+
+# DEPLOYMENT FOUNDATION — PART 1 (Sep 2026)
+
+Addresses a strict subset of the staging-readiness blockers/high findings. **No AWS resources,
+Terraform, or GitHub Actions were created.** The application architecture, authentication
+architecture, database schema, and product features were not changed.
+
+## Closed this phase
+
+- **Blocker #3 — Git repository — CLOSED.** Verified the project was **not** inside any git
+  repo, initialized git at the monorepo root (`git init -b main`, branch `main`), verified
+  `.gitignore` correctly excludes `.env`, `node_modules`, `dist`, `.next`, `.turbo`, and IDE
+  artifacts, checked `git status` (only source/config/docs untracked; only `.env.example`
+  template files tracked), reviewed the staged set (218 files; no keys/certs, no file >1MB,
+  no real `.env`), and created the initial baseline commit `3c0008e`. **No remote configured;
+  nothing pushed** (no push unless instructed).
+- **HIGH #6 — Hardcoded JWT fallback secrets — CLOSED.** Removed the code-level literals:
+  - `apps/api/src/modules/auth/strategies/jwt.strategy.ts` — `secretOrKey` no longer falls back
+    to `sms-super-secret-jwt-key-for-dev-environment-12345`; now `get('JWT_ACCESS_SECRET')`.
+  - `apps/api/src/modules/auth/auth.service.ts` — `JWT_REFRESH_SECRET` no longer falls back to
+    `'refresh-secret'`; now `get('JWT_REFRESH_SECRET')`.
+  - `apps/api/src/modules/auth/auth.module.ts` (access secret), `jwt.strategy.ts`, and
+    `auth.service.ts` all now read the secrets **without any literal fallback**. Production/
+    staging already fail-fast via `validateEnv` (required, ≥16 chars, not a committed dev
+    default). Dev/test values come from the **explicit** dev schema defaults, not hidden
+    fallbacks. `env.validation` was **not weakened**. Repo-wide sweep confirms no runtime
+    `get('JWT_*', <literal>)` remains; the only remaining secret strings are the intentional
+    `DEV_*` validation constants + explicit test mocks.
+- **HIGH #8 — Web API base-URL fallback mismatch — CLOSED.**
+  - `apps/web/src/lib/api/client.ts` fallback corrected from `http://localhost:4000` →
+    `http://localhost:3001` (the actual API dev port).
+  - `apps/web/next.config.js` now **fails the build** if `NEXT_PUBLIC_API_URL` is missing during
+    a production/staging build (no silent wrong-server fallback); local dev still defaults to
+    port 3001. Verified: prod build without URL throws with a clear message; with URL loads fine.
+  - `apps/web/Dockerfile` accepts a required `NEXT_PUBLIC_API_URL` build arg (inlined at build).
+  - `docker-compose.yml` passes the build arg; root `.env.example` and new `apps/web/.env.example`
+    document it.
+
+## Still open (not addressed this phase)
+
+- **Blocker #1 — No Terraform/AWS IaC** — open.
+- **Blocker #2 — No CI/CD** — open.
+- **HIGH #4 — No graceful shutdown** — **CLOSED in Part 2** (see "DEPLOYMENT FOUNDATION — PART 2" below).
+- **HIGH #5 — DB startup crash-loop / no retry** — **CLOSED in Part 2** (see below).
+- **HIGH #7 — No Sentry/OpenTelemetry/structured logs** — **CLOSED in Part 2** (see below).
+
+## Verification (Phase D) — results
+
+Environment note: a pre-existing corrupted `next` package (`dist/` missing) in `node_modules`
+blocked `next build`; repaired with `pnpm install --force` after stopping the local API dev
+process (the same issue recorded earlier in this doc). All gates below run with
+`NEXT_PUBLIC_API_URL=http://localhost:3001` (required by the new production-build guard for a
+local verification build).
+
+- [x] `turbo type-check` — **6/6 green** (shared, api, web).
+- [x] `turbo lint` — **3/3 green**, 0 errors (29 pre-existing warnings, unchanged).
+- [x] `turbo test` — **3/3 green, 180/180** (added explicit JWT-secret returns to the
+  `jwt.strategy.spec` / `auth.service.spec` config mocks to reflect the no-hidden-fallback
+  behavior).
+- [x] `turbo build` — **3/3 green**; API cleaned and rebuilt to 71 JS files (the previously
+  noted `dist`/`tsconfig.tsbuildinfo` footgun) and re-verified against source.
+- [x] API `test:e2e` — **52/52 green** against live Postgres+Redis on `:3001` (API restarted
+  from rebuilt `dist`; readiness `ok`).
+- [ ] Web `test:e2e` — **PRE-EXISTING GAP, not addressed**: `apps/web` has no Playwright specs
+  or config (`playwright test` → "No tests found"). Unchanged by this phase and not one of the
+  8 audit findings; left open.
+- [x] **No hardcoded JWT fallback remains** — verified in source and in compiled `dist`
+  (search returns zero literal `refresh-secret`/`sms-super-secret-jwt-key-for-dev` in runtime
+  auth code).
+
+## Remaining staging blockers (unchanged)
+
+1. **Terraform / AWS IaC** — still absent.
+2. **CI/CD (`.github/`)** — still absent.
+3. **Repository baseline** — now present (Part 1 closed it). The remaining blockers to a staging
+   deployment are now **Terraform/IaC** (Blocker #1) and **CI/CD** (Blocker #2). The HIGH
+   resilience/observability items (#4, #5, #7) were closed in **DEPLOYMENT FOUNDATION — PART 2**
+   below.
+
+---
+
+# DEPLOYMENT FOUNDATION - PART 2 (Sep 2026)
+
+Closes the remaining HIGH staging-readiness findings from Part 1: **HIGH #4 (graceful shutdown)**,
+**HIGH #5 (DB startup retry/backoff)**, and **HIGH #7 (observability)**. As in Part 1, **no AWS
+resources, Terraform, or GitHub Actions were created**; no DB schema, authentication architecture,
+or tenant-isolation changes were made. Web is unchanged (its build guard from Part 1 still applies).
+
+## Closed this phase
+
+- **HIGH #4 - No graceful shutdown - CLOSED.**
+  - `apps/api/src/main.ts` now calls `app.enableShutdownHooks()` (line 29) **before** `listen()` so
+    Nest destroy/lifecycle hooks run on SIGTERM/SIGINT.
+  - `apps/api/src/infrastructure/queue/queue-shutdown.service.ts` implements `OnApplicationShutdown`
+    and closes all 7 BullMQ queues with a **bounded 5s `Promise.race`** (so shutdown cannot hang the
+    container drain even if a queue close stalls). `QueueModule` registers it.
+  - Verified: API exits cleanly (not hard-killed) on shutdown; the `PrismaService.onModuleDestroy ->
+    $disconnect` path and queue close now actually run on signal. (Unit-covered; the shutdown log
+    line is not captured in harness-redirected stdout - a known stdout-buffering artifact, not a code
+    defect.)
+
+- **HIGH #5 - DB startup crash-loop / no retry - CLOSED.**
+  - `apps/api/src/infrastructure/database/db-connect-policy.ts` + `db-connect-retrier.ts`: the
+    module-init `$connect` is no longer a single unguarded attempt. Prisma connect now retries with
+    **bounded exponential backoff (1-30s)**, with a retry budget and an optional configured
+    `DB_CONNECT_RETRIES` / `DB_CONNECT_RETRY_BASE_MS` (parsed in `env.validation.ts` as optional
+    vars on the common schema, so validation still fails fast without weakening it).
+  - Startup that reaches Postgres still proceeds immediately (no artificial delay when healthy).
+  - Verified: on a healthy stack the API boots straight through with no retry stalls (readiness
+    `database: ok latencyMs 4`); the retry path is unit-tested. Fargate/ECS can now sequence RDS
+    before the task or rely on the in-process backoff (covered by `db-connect-*.spec`).
+
+- **HIGH #7 - No Sentry/OpenTelemetry/structured logs - CLOSED (minimal option chosen by user).**
+  - User selected the **minimal observability** option: **structured JSON logs + per-request
+    correlation ID only**. **No Sentry SDK, no OpenTelemetry runtime dependencies were added.**
+    `SENTRY_DSN` remains documented (`.env.example`) but is intentionally never consumed this phase.
+  - `apps/api/src/common/observability/json-logger.ts`: a `LoggerService` emitting single-line JSON
+    with `level, message, timestamp (ISO), env, context, correlationId` (no ANSI color).
+  - `apps/api/src/common/observability/trace-context.ts` + `request-context.middleware.ts`: assigns a
+    per-request correlation ID (UUID), forwards an inbound `X-Request-ID`, and echoes it on the
+    response `x-request-id` header and in every log line for that request.
+  - `apps/api/src/common/observability/observability.module.ts` wires the middleware + overrides the
+    Nest logger globally (`main.ts` `Logger.overrideLogger(jsonLogger)`).
+  - `apps/api/src/common/filters/http-exception.filter.ts`: 5xx errors log full detail to server logs
+    (never to the response) using the **route template path without query strings**.
+  - **No-secret guarantee verified**: the middleware logs method + route path + status + durationMs;
+    it never logs authorization headers, cookies, tokens, JWT secrets, passwords, request bodies, or
+    query strings. Live log scan over a full E2E run reported 0 hits for accessToken / refreshToken /
+    password / cookie / Bearer / secret / request body / query string (the only "Authorization"/"jwt"
+    strings are Nest module init names).
+  - Verified live: startup logs are JSON (`level,message,timestamp,env,context,correlationId`);
+    `X-Request-ID: <uuid>` round-trips on requests; "request complete" lines carry
+    `{method,path,status,durationMs,correlationId,env}` with path = route template (no query string).
+
+## Verification (Phase D / Part 2) - results
+
+Environment note: TS `incremental: true` in the API tsconfig caused `tsc -p tsconfig.json` /
+`nest build` to **silently no-op** (exit 0, zero files emitted) once a stale/absent `*.tsbuildinfo`
+combined with the harness environment. Build with `--incremental false` (or clear `dist` +
+`*.tsbuildinfo` together) to emit. This is the concrete mechanism behind the Part-1 "dist/tsbuildinfo
+footgun" note. After the full node_modules wipe + reinstall (see below), `prisma generate` (v5.22.0)
+was re-run and `packages/shared` was rebuilt before the API could compile against `@sms/shared`.
+
+- [x] **Environment repair (this pass)** - the global pnpm store's `rxjs@7.8.2` was genuinely corrupt
+  (had `src/` but no `dist/`; `inquirer@8.2.6` junction chain also broken). A **full node_modules wipe
+  + `pnpm install --force`** (1196 pkgs) definitively fixed it - manual tarball repairs and
+  `pnpm store add` did **not** hold. Afterward: `prisma generate` (v5.22.0) and rebuilding
+  `packages/shared` (`npx tsc` from `packages/shared`) were required before the API compiled.
+- [x] `turbo type-check` - **6/6 green**, exit 0.
+- [x] `turbo lint` - **3/3 green**, 0 errors (29 pre-existing warnings, unchanged).
+- [x] `turbo test` - **3/3 green, 196/196** (19 files; 180 previous + new db-connect/observability/
+  queue-shutdown specs and env-validation additions).
+- [x] `turbo build` - **3/3 green**, exit 0 (FULL TURBO cache; web prod guard satisfied with
+  `NEXT_PUBLIC_API_URL=http://localhost:3001` exported). API `dist` rebuilt to **312 files** via
+  `tsc -p tsconfig.json --incremental false` (exit 0) for the local runtime verification.
+- [x] API `test:e2e` - **52/52 green** (1 file, 7 workflows) against live Postgres+Redis on `:3001`
+  from the rebuilt `dist` (readiness `ok`; database `ok` latencyMs 4, redis `ok` latencyMs 0).
+- [x] **Runtime observability verified** - structured JSON startup logs; readiness/liveness 200 with
+  DB+Redis checks; `X-Request-ID` correlation round-trip; request-complete logs with route-template
+  paths; no secrets/query-strings in logs.
+- [x] **No-secret scan passed** over the full live E2E run log (see HIGH #7 above).
+
+## Still open (not addressed)
+
+- **Blocker #1 - No Terraform/AWS IaC** - open.
+- **Blocker #2 - No CI/CD (`.github/`)** - open.
+- **HIGH #6 - accounted for; Part 1 closed it; Part 2 leaves it closed.**
+- **Account lockout (real backoff counter)** - `NOT STARTED` (mitigated by enforced rate limiting).
+- **Reference seed data (leave types, subscription plans)** - deferred (company-scoped; needs
+  provisioning-strategy decision).
+- **Security/unauthorized-access, concurrency test suites** - remain open.
+- **Web `test:e2e` (Playwright)** - pre-existing gap, not part of the 8 audit findings; unchanged.
+
+## Verdict (updated)
+
+The three application-level **HIGH** resilience/observability findings are now closed (graceful
+shutdown, DB-connect retry/backoff, structured logs + correlation ID). What remains between the MVP
+and staging is **infrastructure + release engineering only**: Terraform/AWS IaC (Blocker #1) and
+CI/CD (Blocker #2), plus the accepted/deferred product & test items list above. No application
+architecture, auth, tenant isolation, or DB schema was changed in this phase.

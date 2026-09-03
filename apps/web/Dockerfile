@@ -1,5 +1,9 @@
 FROM node:20-alpine AS builder
 
+# Must be supplied at image build time for production/staging — it is inlined into the
+# client bundle by `next build`. Required by the next.config.js guard (no default).
+ARG NEXT_PUBLIC_API_URL
+
 WORKDIR /app
 
 RUN corepack enable
@@ -10,6 +14,7 @@ COPY apps/web/ ./apps/web/
 
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @sms/shared build
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 RUN pnpm --filter @sms/web build
 
 FROM node:20-alpine AS runner

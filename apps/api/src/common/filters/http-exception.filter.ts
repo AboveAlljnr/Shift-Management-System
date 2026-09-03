@@ -48,8 +48,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
         : undefined;
 
     if (status >= 500) {
-      // Full detail goes to the server logs only, never to the client response body.
-      this.logger.error(`${request.method} ${request.url}`, exception instanceof Error ? exception.message : String(exception), exception instanceof Error ? exception.stack : undefined);
+      // Full detail goes to the server logs only, never to the client response body. Use the
+      // route template (not the raw URL) to avoid logging query-string PII; the structured
+      // logger attaches the request correlation id automatically.
+      this.logger.error(
+        `${request.method} ${request.route?.path ?? request.path}`,
+        exception instanceof Error ? exception.message : String(exception),
+        exception instanceof Error ? exception.stack : undefined,
+      );
     }
 
     response.status(status).json({

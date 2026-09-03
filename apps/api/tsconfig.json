@@ -9,7 +9,6 @@
     "rootDir": "src",
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
-    "incremental": true,
     "paths": {
       "@sms/shared": ["../../packages/shared/dist/index.d.ts"]
     }

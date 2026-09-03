@@ -2,6 +2,8 @@ import { BullModule } from '@nestjs/bull';
 import { Module } from '@nestjs/common';
 import { QUEUE_NAMES } from '@sms/shared';
 
+import { QueueShutdownService } from './queue-shutdown.service';
+
 @Module({
   imports: [
     BullModule.registerQueue(
@@ -14,6 +16,7 @@ import { QUEUE_NAMES } from '@sms/shared';
       { name: QUEUE_NAMES.OFFLINE_RECONCILIATION },
     ),
   ],
+  providers: [QueueShutdownService],
   exports: [BullModule],
 })
 export class QueueModule {}
