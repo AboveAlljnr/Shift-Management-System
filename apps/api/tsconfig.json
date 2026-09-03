@@ -9,6 +9,12 @@
     "rootDir": "src",
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
+    // Disable incremental compilation. The NestJS CLI compiler unconditionally
+    // calls tsBinary.createIncrementalProgram, which can silently no-op (emit
+    // zero files) when a stale .tsbuildinfo is present and sources appear
+    // unchanged. Setting false here forces a full emit on every build and
+    // prevents .tsbuildinfo files from being written.
+    "incremental": false,
     "paths": {
       "@sms/shared": ["../../packages/shared/dist/index.d.ts"]
     }

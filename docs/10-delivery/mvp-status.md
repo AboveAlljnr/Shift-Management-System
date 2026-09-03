@@ -525,3 +525,54 @@ shutdown, DB-connect retry/backoff, structured logs + correlation ID). What rema
 and staging is **infrastructure + release engineering only**: Terraform/AWS IaC (Blocker #1) and
 CI/CD (Blocker #2), plus the accepted/deferred product & test items list above. No application
 architecture, auth, tenant isolation, or DB schema was changed in this phase.
+
+---
+
+# DEPLOYMENT FOUNDATION — PART 3A (Sep 2026)
+Build Integrity + Reproducible Artifact Gate
+
+Eliminates the possibility of a false-positive production API build caused by TypeScript incremental
+compilation caching under NestJS CLI.
+
+## Closed this phase
+
+- **Build Integrity / False-Positive Production Build — CLOSED.**
+  - **Root cause analysis:** `@nestjs/cli/lib/compiler/compiler.js` (line 21) unconditionally invokes
+    `tsBinary.createIncrementalProgram || tsBinary.createProgram`. When TypeScript compiler options
+    do not explicitly disable incremental mode, stale build state can result in `nest build` exiting
+    with code 0 while silently skipping file emission (emitting zero files).
+  - **Exact fix applied:**
+    - `apps/api/tsconfig.json`: explicitly added `"incremental": false` to `compilerOptions`. This forces
+      TypeScript's program factory to perform a full compile and emit on every run, preventing `.tsbuildinfo`
+      from being written or causing silent no-ops.
+    - `apps/api/Dockerfile`: updated the builder stage to execute `RUN pnpm --filter @sms/api exec prisma generate`
+      before `RUN pnpm --filter @sms/api build`, ensuring Prisma client typings are available during container
+      builds, and updated the runner stage to copy complete `node_modules` from the builder stage.
+  - **Emitted artifact verification:**
+    - Local clean build (`dist` wiped, zero `.tsbuildinfo`): **78 JS files** (344 total files in `dist/`),
+      `dist/main.js` entrypoint verified. Consecutive builds consistently emit all 78 JS files.
+    - Runtime startup: compiled entrypoint started with structured JSON logging; `/api/v1/health` returned
+      200 `status: ok` with live database and Redis latency checks.
+    - Docker container build (`sms-api:test`): image built successfully; inspected container filesystem
+      confirming all **78 JS files** and `apps/api/dist/main.js` entrypoint exist.
+  - **Monorepo validation gates:**
+    - `turbo type-check`: **6/6 green**, exit 0.
+    - `turbo lint`: **3/3 green**, 0 errors, 29 pre-existing warnings (exit 0).
+    - `turbo test`: **3/3 green, 196/196 passed** (19 files).
+    - `turbo build`: **3/3 green, FULL TURBO**, exit 0.
+    - `test:e2e`: **52/52 green** (1 file, 7 workflows) against live Postgres + Redis.
+
+## Remaining staging blockers (unchanged)
+
+1. **Blocker #1 — No Terraform / AWS IaC** — open.
+2. **Blocker #2 — No CI/CD (`.github/`)** — open.
+3. **Account lockout / 2FA** — lockout mitigated by rate limiting; 2FA open.
+4. **Reference seed data & test suites** — unauthorized-access, concurrency suites remain open.
+
+## Verdict
+
+**NOT STAGING READY YET.** Production API artifact generation is now deterministic, verified, and immune
+to incremental compilation no-ops. Staging readiness remains blocked on infrastructure (Terraform/IaC)
+and CI/CD pipelines. No architecture, database schema, authentication, tenant isolation, or business logic
+changes were introduced.
+
