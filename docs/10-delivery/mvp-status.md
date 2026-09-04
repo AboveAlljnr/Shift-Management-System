@@ -576,3 +576,114 @@ to incremental compilation no-ops. Staging readiness remains blocked on infrastr
 and CI/CD pipelines. No architecture, database schema, authentication, tenant isolation, or business logic
 changes were introduced.
 
+---
+
+# DEPLOYMENT FOUNDATION — PART 3B (Sep 2026)
+AWS Staging Terraform Infrastructure (Authoring + Validation Only)
+
+Creates the **Terraform/IaC for the approved staging architecture** under `infra/terraform/`. This
+addresses **Blocker #1 (No Terraform/AWS IaC)** at the authoring-and-validation stage: `fmt`, `init`,
+`validate`, and a configuration-only `plan` all pass. **No AWS resources were created and no
+`terraform apply` was run** (no AWS credentials exist in this environment and none were invented).
+CI/CD (Blocker #2) remains open.
+
+## Scope executed this phase
+
+- **Terraform binary installed** (v1.9.8, direct download from HashiCorp releases; Windows `choco`
+  failed on admin/lock). Providers resolved: `aws` 5.100.0, `random` 3.9.0. `.terraform.lock.hcl`
+  committed alongside the config.
+- **Root config authored:** `infra/terraform/{versions.tf, main.tf, variables.tf, outputs.tf,
+  terraform.tfvars.example}`. `versions.tf` pins `aws ~> 5.50`, `random ~> 3.6`,
+  `required_version >= 1.9.0, < 2.0.0`, and declares `backend "local" {}` only (no invented remote
+  backend).
+- **10 modules authored/wired:** `networking`, `security`, `cloudwatch`, `ecr`, `iam`, `secrets`,
+  `rds`, `redis`, `alb`, `ecs`.
+- **Secret strategy:** DB master password + JWT access/refresh secrets are generated at apply time by
+  `random_password`, stored only in Terraform state + Secrets Manager, composed into
+  `DATABASE_URL`/`REDIS_URL`/JWT secret values. `terraform.tfvars.example` is secret-free. Outputs
+  expose ARNs/DNS only, never secret values.
+
+## Approved staging topology (as authored)
+
+- Region `us-east-1`; VPC `10.0.0.0/16`; 2 AZs; 2 public + 2 private subnets; 1 IGW; 1 NAT (EIP).
+- Internet-facing **ALB**, HTTP:80 (ALB DNS hostname). Routing: `/api/*` and `/socket.io/*` →
+  API target group; default → Web. Health checks: API `/api/v1/health/live`, Web `/`.
+- **ECS Fargate** API (0.25 vCPU / 0.5 GB, 1 replica, port 3001) + Web (0.25 vCPU / 0.5 GB, 1 replica,
+  port 3000), awsvpc on private subnets, CloudWatch `awslogs` (7-day retention).
+- **RDS PostgreSQL 16.1**, single-AZ `db.t4g.micro`, 20 GB gp3, `storage_encrypted=true`,
+  `publicly_accessible=false`, backups 7 days, final snapshot `staging-sms-db-final`,
+  `deletion_protection=false` (documented staging-only).
+- **ElastiCache Redis 7.1**, `cache.t4g.micro`, 1 node, `default.redis7`, snapshots 1,
+  `auto_minor_version_upgrade=false`, no cluster mode/HA.
+- **ECR** `sms-api` + `sms-web` (keep last 5 images); **IAM** separate least-privilege ECS task
+  execution role (ECR pull + CloudWatch logs + read the 4 specific Secrets Manager secrets) and an
+  application task role with no policies (app has no S3/AWS API needs).
+- **Explicitly deferred (not authored):** S3, CloudFront, WAF, optimizer service, Multi-AZ, autoscaling,
+  multi-region, HTTPS/custom domain/ACM, production HA. No optimizer/S3/domain invented.
+
+## Security / networking model (as authored)
+
+Follows the user-approved reconciliation, including the explicit NAT correction (**NAT is a
+route-table concept, never an SG destination**):
+
+- ALB ingress HTTP:80 from `0.0.0.0/0`; ALB→Web:3000; ALB→API:3001.
+- Web ingress from ALB:3000; Web egress→API:3001; Web egress HTTPS:443 (`0.0.0.0/0`, via NAT).
+- API ingress from ALB:3001 + from Web:3001; API egress→RDS:5432; API egress→Redis:6379;
+  API egress HTTPS:443 (`0.0.0.0/0`, via NAT).
+- RDS ingress from API only (no public ingress); Redis ingress from API only (no public ingress).
+- Private ECS outbound HTTPS traverses the NAT (private route table → NAT → IGW). No rule ever targets a
+  NAT security group.
+
+## Validation results
+
+- `terraform fmt -recursive` — exit 0.
+- `terraform init` (full, local backend) — exit 0 (lock file created).
+- `terraform validate` — `Success! The configuration is valid.`, exit 0 (verified with and without the
+  temporary plan override).
+- `terraform plan -refresh=false` (configuration-only, via a **temporary git-ignored `override.tf`**
+  + ephemeral dummy credentials so the AWS provider could build the graph without a real account) —
+  **`Plan: 69 to add, 0 to change, 0 to destroy.`**, exit 0. The temporary `override.tf` was **deleted**
+  afterward; the committed config revalidates clean.
+- **No-secrets scan** over all committed Terraform files — clean (only ARN references and
+  `random_password` declarations; no plaintext passwords, keys, or private keys).
+
+### Plan resource breakdown (69 add)
+
+- **Networking:** VPC, IGW, NAT (EIP), 2× public subnet, 2× private subnet, public/private route
+  tables, 4× route table associations.
+- **Security:** 5 security groups (alb, ecs_web, ecs_api, rds, redis) + 13 SG rules matching the model
+  above (verified: no NAT-as-SG-destination, no public DB/Redis ingress).
+- **RDS:** DB instance, parameter group, subnet group. **Redis:** cluster + subnet group.
+- **Secrets:** 4 secrets + 4 versions + 3 `random_password` (DB master, JWT access, JWT refresh).
+- **ECR, CloudWatch, IAM** (execution role, task role, secrets-read policy), **ALB** (target groups,
+  listener + listening rules), **ECS** (cluster, 2 task definitions + 2 services).
+
+## Repo gates after infra authoring (all green)
+
+- [x] `turbo type-check` — **6/6 green**.
+- [x] `turbo lint` — green, 0 errors (29 pre-existing API warnings, unchanged).
+- [x] `turbo test` — **196/196** unit tests (API), web passes with no tests.
+- [x] `turbo build` — **3/3 green** (API `dist` intact; web standalone 19 pages).
+- [x] API `test:e2e` — **52/52** against live Postgres (`sms-postgres`:5434) + Redis (`sms-redis`:6379)
+  on `:3001` (readiness `ok`, DB+Redis latency checks).
+
+## Still open / remaining decisions
+
+- **Blocker #2 — No CI/CD (`.github/`)** — open (unchanged).
+- **Not applied:** `terraform apply` has NOT been run; **no AWS resources exist**. Authoring used a
+  configuration-only plan because no AWS account/credentials exist here — do not claim staging is
+  provisioned.
+- **Apply prerequisites (when attempted in CI/manual):** real AWS credentials (OIDC or env), a real
+  `terraform.tfvars` (region/DB username/name — still secret-free), and a decision on whether to keep
+  the `local` backend or migrate to a remote state before `apply`.
+- Account lockout / 2FA, reference seed data, security/concurrency test suites — unchanged open items.
+
+## Verdict
+
+**STAGING READY (infrastructure-authoring only) — NOT PROVISIONED.** The approved AWS staging
+architecture is now fully defined in Terraform and validated (`fmt`/`init`/`validate`/config-only
+`plan` = 69 resources). Deploying it requires real AWS credentials + running `terraform apply` in a
+dedicated staging account, plus the CI/CD pipeline (Blocker #2). No AWS resources were created, nothing
+was pushed, and no architecture/database/auth/business-logic changes were introduced.
+
+

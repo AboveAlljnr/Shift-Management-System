@@ -1,0 +1,19 @@
+# Example Terraform variables for the staging deployment.
+# Copy to terraform.tfvars and adjust. NEVER put secrets in this file or in
+# terraform.tfvars - the DB password and JWT secrets are generated at apply
+# time by the random provider and live only in Terraform state + Secrets Manager.
+
+environment         = "staging"
+region              = "us-east-1"
+availability_zones  = ["us-east-1a", "us-east-1b"]
+vpc_cidr            = "10.0.0.0/16"
+public_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"]
+private_subnet_cidrs = ["10.0.10.0/24", "10.0.20.0/24"]
+db_name             = "sms"
+db_username         = "sms"
+
+tags = {
+  Project     = "shift-management-system"
+  Environment = "staging"
+  ManagedBy   = "terraform"
+}
