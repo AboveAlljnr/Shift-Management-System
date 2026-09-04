@@ -6,6 +6,7 @@ import type {
   Department,
   Employee,
   EmploymentType,
+  GeofenceEnforcementConfig,
   LeaveRequest,
   LeaveType,
   Schedule,
@@ -427,6 +428,7 @@ export function recordClockEvent(
 
 export interface MyGeofenceStatus {
   applicable: boolean;
+  mode?: 'strict' | 'warning' | 'off';
   branchId?: string;
   branchName?: string;
   radiusMeters?: number;
@@ -434,6 +436,16 @@ export interface MyGeofenceStatus {
 
 export function fetchMyGeofenceStatus(): Promise<MyGeofenceStatus> {
   return getData<MyGeofenceStatus>('/attendance/me/geofence');
+}
+
+export function fetchGeofenceConfig(): Promise<GeofenceEnforcementConfig> {
+  return getData<GeofenceEnforcementConfig>('/attendance/geofence-config');
+}
+
+export function updateGeofenceConfig(
+  dto: Partial<GeofenceEnforcementConfig>,
+): Promise<GeofenceEnforcementConfig> {
+  return patchData<GeofenceEnforcementConfig>('/attendance/geofence-config', dto);
 }
 
 export function fetchDailyAttendance(date: string): Promise<AttendanceRecordDetail[]> {

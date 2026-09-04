@@ -358,6 +358,20 @@ export interface AttendanceEvent {
   metadata?: Record<string, unknown>;
 }
 
+// ---- Geofence enforcement (configurable, ADR-003) ----
+export type GeofenceEnforcementMode = 'strict' | 'warning' | 'off';
+
+export interface GeofenceEnforcementConfig {
+  /** How the clock-in event is enforced against an active branch geofence. */
+  mode: GeofenceEnforcementMode;
+  /**
+   * strict: outside an active geofence -> clock-in rejected (GEOFENCE_OUTSIDE).
+   * warning: outside -> clock-in accepted but flagged (verified=false, geofenceWarning).
+   * off: geofence enforcement skipped for clock-in entirely.
+   */
+  allowMissingLocation?: boolean;
+}
+
 // ---- Leave ----
 export type LeaveStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 

@@ -3,7 +3,16 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { ClockEventDto, AttendanceCorrectionDto } from '@sms/shared';
+import type {
+  ClockEventDto,
+  AttendanceCorrectionDto,
+  GeofenceEnforcementConfigDto,
+} from '@sms/shared';
+
+type GeofenceEnforcementConfig = {
+  mode: 'strict' | 'warning' | 'off';
+  allowMissingLocation: boolean;
+};
 
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -29,72 +38,109 @@ export class AttendanceService {
       return { status: 'deduplicated', eventId: existingEvent.id };
     }
 
-    // Geofence enforcement (Hackathon Upgrade 2). Only clock-in is geofenced:
-    // clock-out, break events are not location-dependent. The employee must be
-    // assigned to a branch with an ACTIVE geofence for a fence to apply.
+    // Geofence enforcement (configurable, ADR-003). Only clock-in is
+    // location-dependent: clock-out, break events are not. The employee must be
+    // assigned to a branch with an ACTIVE geofence for a fence to apply, and the
+    // company's configured enforcement mode decides whether an out-of-fence
+    // clock-in is rejected, warned about, or not enforced at all.
     let geofenceResult: string | undefined;
+    let geofenceWarning: string | undefined;
+    let verified = false;
     if (dto.eventType === 'clock_in') {
-      const employee = await this.prisma.employee.findUnique({
-        where: { id: employeeId },
-        select: { branchId: true },
-      });
-      const branchId = employee?.branchId ?? null;
-      const fence = branchId
-        ? await this.prisma.geofence.findFirst({
-            where: { companyId, branchId, isActive: true },
-            include: { branch: { select: { name: true } } },
-          })
-        : null;
+      const enforcement = await this.getGeofenceEnforcementConfig(companyId);
 
-      if (fence) {
-        this.assertClockInLocation(dto, fence.latitude, fence.longitude);
+      // "off" disables geofence enforcement entirely: no fence lookup, no
+      // coordinate requirement, no verification at clock-in.
+      if (enforcement.mode !== 'off') {
+        const employee = await this.prisma.employee.findUnique({
+          where: { id: employeeId },
+          select: { branchId: true },
+        });
+        const branchId = employee?.branchId ?? null;
+        const fence = branchId
+          ? await this.prisma.geofence.findFirst({
+              where: { companyId, branchId, isActive: true },
+              include: { branch: { select: { name: true } } },
+            })
+          : null;
 
-        const evaluation = this.geofence.evaluate(
-          { latitude: dto.latitude as number, longitude: dto.longitude as number },
-          {
-            latitude: fence.latitude,
-            longitude: fence.longitude,
-            radiusMeters: fence.radiusMeters,
-          },
-        );
+        if (fence) {
+          this.assertClockInLocation(dto, fence.latitude, fence.longitude);
 
-        if (!evaluation.inside) {
-          // Do NOT create any attendance record/event for a denied clock-in.
-          await this.audit.record({
-            companyId,
-            action: 'attendance.clock_in.geofence_denied',
-            resource: 'attendance',
-            resourceId: employeeId,
-            after: {
-              branchId,
-              distanceMeters: evaluation.distanceMeters,
-              radiusMeters: evaluation.radiusMeters,
+          const evaluation = this.geofence.evaluate(
+            { latitude: dto.latitude as number, longitude: dto.longitude as number },
+            {
+              latitude: fence.latitude,
+              longitude: fence.longitude,
+              radiusMeters: fence.radiusMeters,
             },
-          });
-          throw new BadRequestException({
-            message:
-              `You are outside the allowed clock-in area for ${fence.branch?.name ?? 'your branch'}. ` +
-              `You are ${Math.round(evaluation.distanceMeters)}m from the center (allowed within ${Math.round(evaluation.radiusMeters)}m).`,
-            errors: [
-              {
-                code: 'GEOFENCE_OUTSIDE',
-                message: 'Outside allowed clock-in area',
-                details: {
+          );
+
+          if (!evaluation.inside) {
+            if (enforcement.mode === 'strict') {
+              // Do NOT create any attendance record/event for a denied clock-in.
+              await this.audit.record({
+                companyId,
+                action: 'attendance.clock_in.geofence_denied',
+                resource: 'attendance',
+                resourceId: employeeId,
+                after: {
                   branchId,
-                  branchName: fence.branch?.name,
                   distanceMeters: evaluation.distanceMeters,
                   radiusMeters: evaluation.radiusMeters,
                 },
-              },
-            ],
-          });
-        }
+              });
+              throw new BadRequestException({
+                message:
+                  `You are outside the allowed clock-in area for ${fence.branch?.name ?? 'your branch'}. ` +
+                  `You are ${Math.round(evaluation.distanceMeters)}m from the center (allowed within ${Math.round(evaluation.radiusMeters)}m).`,
+                errors: [
+                  {
+                    code: 'GEOFENCE_OUTSIDE',
+                    message: 'Outside allowed clock-in area',
+                    details: {
+                      branchId,
+                      branchName: fence.branch?.name,
+                      distanceMeters: evaluation.distanceMeters,
+                      radiusMeters: evaluation.radiusMeters,
+                    },
+                  },
+                ],
+              });
+            }
 
-        geofenceResult = JSON.stringify({
-          inside: true,
-          distanceMeters: evaluation.distanceMeters,
-          radiusMeters: evaluation.radiusMeters,
-        });
+            // "warning" mode: accept the clock-in but flag it for review.
+            if (enforcement.mode === 'warning') {
+              geofenceResult = JSON.stringify({
+                inside: false,
+                distanceMeters: evaluation.distanceMeters,
+                radiusMeters: evaluation.radiusMeters,
+                mode: 'warning',
+              });
+              verified = false;
+              geofenceWarning = 'GEOFENCE_OUTSIDE';
+              await this.audit.record({
+                companyId,
+                action: 'attendance.clock_in.geofence_warning',
+                resource: 'attendance',
+                resourceId: employeeId,
+                after: {
+                  branchId,
+                  mode: 'warning',
+                  distanceMeters: evaluation.distanceMeters,
+                  radiusMeters: evaluation.radiusMeters,
+                },
+              });
+            }
+          } else {
+            geofenceResult = JSON.stringify({
+              inside: true,
+              distanceMeters: evaluation.distanceMeters,
+              radiusMeters: evaluation.radiusMeters,
+            });
+            verified = true;
+          }
+        }
       }
     }
 
@@ -137,7 +183,12 @@ export class AttendanceService {
           latitude: dto.latitude,
           longitude: dto.longitude,
           geofenceResult,
-          metadata: (dto.metadata as any) || {},
+          metadata: {
+            ...((dto.metadata as Record<string, unknown>) || {}),
+            ...(dto.eventType === 'clock_in'
+              ? { verified, ...(geofenceWarning ? { geofenceWarning } : {}) }
+              : {}),
+          },
         },
       });
 
@@ -341,6 +392,14 @@ export class AttendanceService {
    * data or any fence coordinates beyond what the caller already knows.
    */
   async getMyGeofenceStatus(companyId: string, userId: string) {
+    const enforcement = await this.getGeofenceEnforcementConfig(companyId);
+
+    // When geofence enforcement is disabled company-wide, no fence is applied
+    // and the client does not need to request geolocation.
+    if (enforcement.mode === 'off') {
+      return { applicable: false, mode: 'off' as const };
+    }
+
     const employee = await this.prisma.employee.findFirst({
       where: { userId, companyId },
       select: {
@@ -361,6 +420,7 @@ export class AttendanceService {
     if (!fence) {
       return {
         applicable: false,
+        mode: enforcement.mode,
         branchId: employee.branch.id,
         branchName: employee.branch.name,
       };
@@ -368,10 +428,54 @@ export class AttendanceService {
 
     return {
       applicable: true,
+      mode: enforcement.mode,
       branchId: employee.branch.id,
       branchName: employee.branch.name,
       radiusMeters: fence.radiusMeters,
     };
+  }
+
+  /**
+   * Effective geofence enforcement configuration for a company. Any unset key
+   * falls back to a safe default (strict = current behavior), so a tenant that
+   * has never configured geofence enforcement keeps its existing clock-in rules.
+   */
+  async getGeofenceEnforcementConfig(companyId: string): Promise<GeofenceEnforcementConfig> {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { settings: true },
+    });
+    const settings = (company?.settings ?? {}) as Record<string, any>;
+    const enforcement = (settings.geofence ?? {}) as Partial<GeofenceEnforcementConfig>;
+    return {
+      mode: enforcement.mode ?? 'strict',
+      allowMissingLocation: enforcement.allowMissingLocation ?? false,
+    };
+  }
+
+  /** Persist a partial geofence enforcement configuration on the company. */
+  async updateGeofenceEnforcementConfig(
+    companyId: string,
+    dto: Partial<GeofenceEnforcementConfigDto>,
+  ) {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { settings: true },
+    });
+    const settings = (company?.settings ?? {}) as Record<string, any>;
+    const current = (settings.geofence ?? {}) as Record<string, any>;
+
+    settings.geofence = {
+      mode: dto.mode ?? current.mode ?? 'strict',
+      allowMissingLocation: dto.allowMissingLocation ?? current.allowMissingLocation ?? false,
+    };
+
+    await this.prisma.company.update({
+      where: { id: companyId },
+      data: { settings },
+    });
+
+    return this.getGeofenceEnforcementConfig(companyId);
   }
 
   /**

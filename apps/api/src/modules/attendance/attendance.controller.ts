@@ -2,14 +2,20 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Body,
   Param,
   Query,
 } from '@nestjs/common';
 import { ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { AttendanceCorrectionSchema, ClockEventSchema } from '@sms/shared';
-import type { ClockEventDto, AttendanceCorrectionDto, User } from '@sms/shared';
+import { AttendanceCorrectionSchema, ClockEventSchema, UpdateGeofenceEnforcementConfigSchema } from '@sms/shared';
+import type {
+  ClockEventDto,
+  AttendanceCorrectionDto,
+  UpdateGeofenceEnforcementConfigDto,
+  User,
+} from '@sms/shared';
 
 import {
   CompanyId,
@@ -52,6 +58,23 @@ export class AttendanceController {
     @CurrentUser() user: User,
   ) {
     return this.attendanceService.getMyGeofenceStatus(companyId, user.id);
+  }
+
+  @Get('geofence-config')
+  @RequiredPermission('attendance.read')
+  @ApiOperation({ summary: 'Get the effective geofence enforcement configuration' })
+  async getGeofenceConfig(@CompanyId() companyId: string) {
+    return this.attendanceService.getGeofenceEnforcementConfig(companyId);
+  }
+
+  @Patch('geofence-config')
+  @RequiredPermission('attendance.override')
+  @ApiOperation({ summary: 'Update the configurable geofence enforcement mode (strict/warning/off)' })
+  async updateGeofenceConfig(
+    @CompanyId() companyId: string,
+    @Body(new ZodValidationPipe(UpdateGeofenceEnforcementConfigSchema.partial())) dto: Partial<UpdateGeofenceEnforcementConfigDto>,
+  ) {
+    return this.attendanceService.updateGeofenceEnforcementConfig(companyId, dto);
   }
 
   @Post('corrections')

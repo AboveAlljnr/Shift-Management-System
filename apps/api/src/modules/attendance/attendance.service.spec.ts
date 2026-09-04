@@ -40,6 +40,10 @@ function createDeps() {
   const attendanceCorrection = { create: vi.fn() };
   const employee = { findFirst: vi.fn(), findUnique: vi.fn() };
   const geofence = { findFirst: vi.fn() };
+  const company = {
+    findUnique: vi.fn().mockResolvedValue({ settings: {} }),
+    update: vi.fn().mockResolvedValue({}),
+  };
   const $transaction = vi.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     fn({ attendanceEvent, attendanceRecord, break: breakRecord, attendanceCorrection } as any),
@@ -51,9 +55,10 @@ function createDeps() {
     attendanceCorrection,
     employee,
     geofence,
+    company,
     $transaction,
   };
-  return { prisma, attendanceEvent, attendanceRecord, breakRecord, attendanceCorrection, employee, geofence };
+  return { prisma, attendanceEvent, attendanceRecord, breakRecord, attendanceCorrection, employee, geofence, company };
 }
 
 const clockInDto = {
@@ -367,5 +372,148 @@ describe('AttendanceService — geofenced clock-in', () => {
     expect(geofence.findFirst).not.toHaveBeenCalled();
     expect(geofenceSvc.evaluate).not.toHaveBeenCalled();
     expect(attendanceEvent.create).toHaveBeenCalled();
+  });
+});
+
+describe('AttendanceService — configurable geofence enforcement', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const fence = {
+    latitude: 40.7128,
+    longitude: -74.006,
+    radiusMeters: 100,
+    branch: { name: 'Downtown' },
+  };
+
+  function clockIn(latitude?: number, longitude?: number) {
+    return {
+      eventType: 'clock_in' as const,
+      clientOccurredAt: '2026-09-02T09:05:00.000Z',
+      source: 'web' as const,
+      idempotencyKey: '66666666-6666-4666-8666-666666666666',
+      latitude,
+      longitude,
+    };
+  }
+
+  function depsWithEnforcement(enforcement: { mode?: 'strict' | 'warning' | 'off'; allowMissingLocation?: boolean } | undefined) {
+    const deps = createDeps();
+    deps.company.findUnique.mockResolvedValue({
+      settings: enforcement ? { geofence: enforcement } : {},
+    });
+    return deps;
+  }
+
+  it('defaults to strict enforcement when the company has never configured geofence enforcement', async () => {
+    const { prisma, attendanceEvent, attendanceRecord, employee, geofence } = depsWithEnforcement(undefined);
+    attendanceEvent.findFirst.mockResolvedValue(null);
+    attendanceRecord.findUnique.mockResolvedValue(null);
+    employee.findUnique.mockResolvedValue({ branchId: 'b1' });
+    geofence.findFirst.mockResolvedValue(fence as never);
+    geofenceSvc.evaluate.mockReturnValue({ distanceMeters: 500, radiusMeters: 100, inside: false });
+
+    const service = new AttendanceService(prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
+    await expect(service.recordClockEvent('c1', 'e1', clockIn(-73.99, 40.75))).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(attendanceEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('warning mode accepts an out-of-fence clock-in and flags it as unverified', async () => {
+    const { prisma, attendanceEvent, attendanceRecord, employee, geofence } = depsWithEnforcement({ mode: 'warning' });
+    attendanceEvent.findFirst.mockResolvedValue(null);
+    attendanceRecord.findUnique.mockResolvedValue(null);
+    attendanceRecord.create.mockResolvedValue({ id: 'recW' });
+    employee.findUnique.mockResolvedValue({ branchId: 'b1' });
+    geofence.findFirst.mockResolvedValue(fence as never);
+    geofenceSvc.evaluate.mockReturnValue({ distanceMeters: 500, radiusMeters: 100, inside: false });
+    attendanceEvent.create.mockResolvedValue({ id: 'evW' });
+    attendanceRecord.update.mockResolvedValue({});
+
+    const service = new AttendanceService(prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
+    const result = await service.recordClockEvent('c1', 'e1', clockIn(-73.99, 40.75));
+
+    expect(result.status).toBe('recorded');
+    expect(attendanceRecord.create).toHaveBeenCalled();
+    expect(attendanceEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          geofenceResult: JSON.stringify({ inside: false, distanceMeters: 500, radiusMeters: 100, mode: 'warning' }),
+          metadata: expect.objectContaining({ verified: false, geofenceWarning: 'GEOFENCE_OUTSIDE' }),
+        }),
+      }),
+    );
+    expect(auditSvc.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'attendance.clock_in.geofence_warning' }),
+    );
+  });
+
+  it('off mode skips geofence enforcement entirely even with an active fence and no coordinates', async () => {
+    const { prisma, attendanceEvent, attendanceRecord, employee, geofence } = depsWithEnforcement({ mode: 'off' });
+    attendanceEvent.findFirst.mockResolvedValue(null);
+    attendanceRecord.findUnique.mockResolvedValue(null);
+    attendanceRecord.create.mockResolvedValue({ id: 'recO' });
+    // Employee is still assigned to a geofenced branch, but enforcement is off.
+    employee.findUnique.mockResolvedValue({ branchId: 'b1' });
+    attendanceEvent.create.mockResolvedValue({ id: 'evO' });
+    attendanceRecord.update.mockResolvedValue({});
+
+    const service = new AttendanceService(prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
+    const result = await service.recordClockEvent('c1', 'e1', clockIn());
+
+    expect(result.status).toBe('recorded');
+    expect(geofence.findFirst).not.toHaveBeenCalled();
+    expect(geofenceSvc.evaluate).not.toHaveBeenCalled();
+    expect(attendanceEvent.create).toHaveBeenCalled();
+  });
+
+  it('off mode short-circuits the self-scoped geofence status', async () => {
+    const deps = depsWithEnforcement({ mode: 'off' });
+    const service = new AttendanceService(deps.prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
+    const status = await service.getMyGeofenceStatus('c1', 'u1');
+    expect(status).toEqual({ applicable: false, mode: 'off' });
+  });
+
+  it('getGeofenceEnforcementConfig returns effective merged defaults for an unset company', async () => {
+    const deps = depsWithEnforcement(undefined);
+    const service = new AttendanceService(deps.prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
+    await expect(service.getGeofenceEnforcementConfig('c1')).resolves.toEqual({
+      mode: 'strict',
+      allowMissingLocation: false,
+    });
+  });
+
+  it('getGeofenceEnforcementConfig surfaces a persisted partial config', async () => {
+    const deps = depsWithEnforcement({ mode: 'warning' });
+    const service = new AttendanceService(deps.prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
+    await expect(service.getGeofenceEnforcementConfig('c1')).resolves.toEqual({
+      mode: 'warning',
+      allowMissingLocation: false,
+    });
+  });
+
+  it('updateGeofenceEnforcementConfig persists the mode into company settings and returns the effective config', async () => {
+    const deps = depsWithEnforcement(undefined);
+    const service = new AttendanceService(deps.prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
+
+    const result = await service.updateGeofenceEnforcementConfig('c1', { mode: 'warning' });
+
+    expect(result).toEqual({ mode: 'warning', allowMissingLocation: false });
+    expect(deps.company.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ settings: { geofence: { mode: 'warning', allowMissingLocation: false } } }),
+      }),
+    );
+  });
+
+  it('geofence enforcement config is tenant-isolated: no settings on the company means strict defaults', async () => {
+    const deps = depsWithEnforcement(undefined);
+    // A missing company row also falls back to strict defaults (never reads another tenant).
+    deps.company.findUnique.mockResolvedValue(null);
+    const service = new AttendanceService(deps.prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
+    await expect(service.getGeofenceEnforcementConfig('c1')).resolves.toEqual({
+      mode: 'strict',
+      allowMissingLocation: false,
+    });
   });
 });

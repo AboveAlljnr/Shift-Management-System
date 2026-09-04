@@ -159,6 +159,19 @@ export const BranchGeofenceSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
+// ---- Geofence enforcement settings (configurable) ----
+export const GeofenceEnforcementModeEnum = z.enum(['strict', 'warning', 'off']);
+
+export const GeofenceEnforcementConfigSchema = z.object({
+  mode: GeofenceEnforcementModeEnum,
+  allowMissingLocation: z.boolean().optional().default(false),
+});
+
+export const UpdateGeofenceEnforcementConfigSchema = z.object({
+  mode: GeofenceEnforcementModeEnum.optional(),
+  allowMissingLocation: z.boolean().optional(),
+});
+
 // ---- Leave schemas ----
 export const CreateLeaveRequestSchema = z.object({
   leaveTypeId: z.string().uuid(),
@@ -241,3 +254,6 @@ export type RequestOptimizationDto = z.infer<typeof RequestOptimizationSchema>;
 export type OptimizeScheduleDto = z.infer<typeof OptimizeScheduleSchema>;
 export type OptimizeApplyDto = z.infer<typeof OptimizeApplySchema>;
 export type PaginationQueryDto = z.infer<typeof PaginationQuerySchema>;
+export type GeofenceEnforcementConfigDto = z.infer<typeof GeofenceEnforcementConfigSchema>;
+
+export type UpdateGeofenceEnforcementConfigDto = z.infer<typeof UpdateGeofenceEnforcementConfigSchema>;
