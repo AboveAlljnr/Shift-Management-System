@@ -3,23 +3,44 @@ import type {
   AvailabilityException,
   AvailabilityRule,
   Branch,
+  Certification,
   Department,
   Employee,
+  EmployeeCertification,
+  EmployeeSkill,
   EmploymentType,
   GeofenceEnforcementConfig,
   LeaveRequest,
   LeaveType,
+  Notification,
+  OpenShiftRequest,
   PresenceVerificationConfig,
   PresenceVerificationStatus,
   Schedule,
+  ScheduleExplanation,
   ScheduleVersion,
   Shift,
   ShiftAssignment,
   ShiftConflictOverride,
+  ShiftSwapRequest,
+  Skill,
   Team,
 } from '@sms/shared';
 
-export type { Schedule, ScheduleVersion, AvailabilityRule, AvailabilityException } from '@sms/shared';
+export type {
+  Schedule,
+  ScheduleVersion,
+  AvailabilityRule,
+  AvailabilityException,
+  Notification,
+  Skill,
+  Certification,
+  EmployeeSkill,
+  EmployeeCertification,
+  OpenShiftRequest,
+  ShiftSwapRequest,
+  ScheduleExplanation,
+} from '@sms/shared';
 
 import { apiClient } from '@/lib/api/client';
 
@@ -182,6 +203,7 @@ export function fetchShifts(params?: {
   startDate?: string;
   endDate?: string;
   status?: string;
+  isOpen?: boolean;
 }): Promise<ShiftDetail[]> {
   return getData<ShiftDetail[]>('/shifts', params);
 }
@@ -194,6 +216,14 @@ export function fetchMyShifts(employeeId: string, params?: { startDate?: string;
   );
 }
 
+export type ShiftRequirementInput = {
+  headcount: number;
+  positionId?: string;
+  branchConstraint?: string;
+  skillIds?: string[];
+  certificationIds?: string[];
+};
+
 export function createShift(body: {
   branchId: string;
   departmentId?: string;
@@ -202,8 +232,16 @@ export function createShift(body: {
   endAt: string;
   isOvernight?: boolean;
   notes?: string;
+  requirements?: ShiftRequirementInput[];
 }): Promise<ShiftDetail> {
   return postData<ShiftDetail>('/shifts', body);
+}
+
+export function updateShiftRequirements(
+  shiftId: string,
+  requirements: ShiftRequirementInput[],
+): Promise<ShiftDetail> {
+  return patchData<ShiftDetail>(`/shifts/${shiftId}/requirements`, { requirements });
 }
 
 export function assignEmployeeToShift(
@@ -371,6 +409,7 @@ export interface ScheduleSuggestion {
   solverTimeSeconds: number;
   objectiveValue?: number;
   assignments: SuggestedAssignment[];
+  explanation?: ScheduleExplanation;
 }
 
 export interface OptimizeCriteria {
@@ -623,3 +662,166 @@ export function configureBranchGeofence(
 }
 
 export { patchData as updateResource };
+
+// ---- Qualifications (skills + certifications, P5) ----
+
+export interface SkillCatalogItem extends Skill {
+  _count: { employeeSkills: number };
+}
+
+export interface CertificationCatalogItem extends Certification {
+  _count: { employeeCertifications: number };
+}
+
+export interface EmployeeQualifications {
+  id: string;
+  firstName: string;
+  lastName: string;
+  employeeNumber: string;
+  skills: EmployeeSkill[];
+  certifications: EmployeeCertification[];
+}
+
+export function fetchSkills(): Promise<SkillCatalogItem[]> {
+  return getData<SkillCatalogItem[]>('/qualifications/skills');
+}
+
+export function fetchCertifications(): Promise<CertificationCatalogItem[]> {
+  return getData<CertificationCatalogItem[]>('/qualifications/certifications');
+}
+
+export function fetchEmployeeQualifications(employeeId: string): Promise<EmployeeQualifications> {
+  return getData<EmployeeQualifications>(`/qualifications/employees/${employeeId}`);
+}
+
+export function setEmployeeSkills(
+  employeeId: string,
+  skills: { skillId: string; proficiencyLevel?: string }[],
+): Promise<EmployeeQualifications> {
+  return putData<EmployeeQualifications>(`/qualifications/employees/${employeeId}/skills`, { skills });
+}
+
+export function setEmployeeCertifications(
+  employeeId: string,
+  certifications: {
+    certificationId: string;
+    issuedAt: string;
+    expiresAt?: string;
+    issuer?: string;
+  }[],
+): Promise<EmployeeQualifications> {
+  return putData<EmployeeQualifications>(`/qualifications/employees/${employeeId}/certifications`, {
+    certifications,
+  });
+}
+
+// ---- Open shifts (P6) ----
+
+export interface OpenShiftRequestRow extends OpenShiftRequest {
+  employee: { id: string; firstName: string; lastName: string; email: string };
+  shift: { id: string; name: string; startAt: string; endAt: string; branchId: string };
+}
+
+export function setShiftOpen(
+  shiftId: string,
+  isOpen: boolean,
+): Promise<{ shiftId: string; isOpen: boolean; notifiedEmployees: number }> {
+  return postData(`/shifts/${shiftId}/open`, { isOpen });
+}
+
+export function requestOpenShift(shiftId: string, note?: string): Promise<OpenShiftRequest> {
+  return postData<OpenShiftRequest>(`/shifts/${shiftId}/open-request`, { note });
+}
+
+export function reviewOpenShiftRequest(
+  requestId: string,
+  body: { action: 'approve' | 'reject'; note?: string },
+): Promise<OpenShiftRequest> {
+  return postData<OpenShiftRequest>(`/shifts/open-requests/${requestId}/review`, body);
+}
+
+export function listOpenShiftRequests(): Promise<OpenShiftRequestRow[]> {
+  return getData<OpenShiftRequestRow[]>('/shifts/open-requests');
+}
+
+// ---- Shift swaps (P7) ----
+
+export interface SwapRequestRow extends ShiftSwapRequest {
+  requestingEmployee: { id: string; firstName: string; lastName: string };
+  targetEmployee: { id: string; firstName: string; lastName: string } | null;
+  shift: { id: string; name: string; startAt: string; endAt: string };
+}
+
+export function requestSwap(
+  shiftId: string,
+  body: { targetEmployeeId?: string; reason?: string },
+): Promise<ShiftSwapRequest> {
+  return postData<ShiftSwapRequest>('/shifts/swap-requests', { shiftId, ...body });
+}
+
+export function respondSwap(
+  requestId: string,
+  action: 'accept' | 'reject',
+): Promise<ShiftSwapRequest> {
+  return postData<ShiftSwapRequest>(`/shifts/swaps/${requestId}/respond`, { action });
+}
+
+export function reviewSwap(
+  requestId: string,
+  body: { action: 'approve' | 'reject'; note?: string },
+): Promise<ShiftSwapRequest> {
+  return postData<ShiftSwapRequest>(`/shifts/swaps/${requestId}/review`, body);
+}
+
+export function listSwapRequests(): Promise<SwapRequestRow[]> {
+  return getData<SwapRequestRow[]>('/shifts/swaps');
+}
+
+// ---- Self-service request ledger ----
+
+export interface MyRequests {
+  openShiftRequests: {
+    id: string;
+    shiftId: string;
+    status: string;
+    resolvedAt: string | null;
+    createdAt: string;
+    shift: { id: string; name: string; startAt: string; endAt: string; isOpen: boolean };
+  }[];
+  swapRequests: {
+    id: string;
+    shiftId: string;
+    requestingEmployeeId: string;
+    targetEmployeeId: string | null;
+    status: string;
+    reason: string | null;
+    createdAt: string;
+    requestingEmployee: { id: string; firstName: string; lastName: string };
+    targetEmployee: { id: string; firstName: string; lastName: string } | null;
+    shift: { id: string; name: string; startAt: string; endAt: string };
+  }[];
+}
+
+export function fetchMyRequests(): Promise<MyRequests> {
+  return getData<MyRequests>('/shifts/my-requests');
+}
+
+// ---- Notifications (P8) ----
+
+export function fetchNotifications(params?: { unreadOnly?: boolean }): Promise<Notification[]> {
+  return getData<Notification[]>('/notifications', {
+    ...(params?.unreadOnly ? { unreadOnly: 'true' } : {}),
+  });
+}
+
+export function fetchUnreadCount(): Promise<{ count: number }> {
+  return getData<{ count: number }>('/notifications/unread-count');
+}
+
+export function markNotificationRead(id: string): Promise<Notification> {
+  return patchData<Notification>(`/notifications/${id}/read`, {});
+}
+
+export function markAllNotificationsRead(): Promise<{ count: number }> {
+  return patchData<{ count: number }>('/notifications/mark-all-read', {});
+}

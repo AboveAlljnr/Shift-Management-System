@@ -30,6 +30,7 @@ import { LeaveModule } from './modules/leave/leave.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { OrganizationModule } from './modules/organization/organization.module';
 import { PermissionsModule } from './modules/permissions/permissions.module';
+import { QualificationsModule } from './modules/qualifications/qualifications.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { SuperAdminModule } from './modules/super-admin/super-admin.module';
@@ -74,6 +75,7 @@ import { SuperAdminModule } from './modules/super-admin/super-admin.module';
     OrganizationModule,
     EmployeeModule,
     PermissionsModule,
+    QualificationsModule,
     SchedulingModule,
     AttendanceModule,
     LeaveModule,

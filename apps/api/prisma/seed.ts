@@ -44,6 +44,13 @@ const DEMO_ACCOUNTS: DemoAccount[] = [
     roleCode: 'EMPLOYEE',
     employeeNumber: 'DEMO-003',
   },
+  {
+    email: 'supervisor@demo.com',
+    password: 'DemoPass-123!',
+    name: 'Demo Supervisor',
+    roleCode: 'SHIFT_MANAGER',
+    employeeNumber: 'DEMO-004',
+  },
 ];
 
 const prisma = new PrismaClient();
@@ -285,9 +292,117 @@ async function seedDemoCompany(): Promise<void> {
     }
   }
 
+  await seedDemoQualifications(company, created);
+
+  const leaveTypes = [
+    { code: 'ANNUAL', name: 'Annual Leave', defaultEntitlementDays: 21 },
+    { code: 'SICK', name: 'Sick Leave', defaultEntitlementDays: 14 },
+    { code: 'CARRYOVER', name: 'Carryover Leave', defaultEntitlementDays: 5 },
+  ];
+  for (const lt of leaveTypes) {
+    const existing = await prisma.leaveType.findFirst({
+      where: { companyId: company.id, code: lt.code },
+    });
+    if (!existing) {
+      await prisma.leaveType.create({
+        data: {
+          companyId: company.id,
+          code: lt.code,
+          name: lt.name,
+          defaultEntitlementDays: lt.defaultEntitlementDays,
+          isActive: true,
+        },
+      });
+      created.push(`leaveType:${lt.code}`);
+    }
+  }
+
   console.log(`Demo company '${DEMO_COMPANY.slug}' ready. Accounts: ${DEMO_ACCOUNTS.map((a) => `${a.email} / ${a.password}`).join(', ')}`);
   if (created.length > 0) {
     console.log(`Created (new): ${created.join(', ')}`);
+  }
+}
+
+/**
+ * Seeds a small qualification catalog (skills + certifications) and grants them
+ * to the demo Employee and Supervisor so the qualification-aware scheduling
+ * features can be exercised out of the box. Idempotent upserts / skipDuplicates.
+ */
+interface CompanyRow {
+  id: string;
+  slug: string;
+}
+
+async function seedDemoQualifications(company: CompanyRow, created: string[]): Promise<void> {
+  const skills = [
+    { code: 'BARISTA', name: 'Barista — Specialty Coffee' },
+    { code: 'CASH', name: 'Cash Handling' },
+  ];
+  const certifications = [
+    { code: 'FOOD', name: 'Food Handling', validityPeriodDays: 365 },
+    { code: 'FIRSTAID', name: 'First Aid', validityPeriodDays: 730 },
+  ];
+
+  const skillIds = new Map<string, string>();
+  const certificationIds = new Map<string, string>();
+
+  for (const s of skills) {
+    const row = await prisma.skill.upsert({
+      where: { companyId_code: { companyId: company.id, code: s.code } },
+      update: {},
+      create: { companyId: company.id, name: s.name, code: s.code },
+    });
+    skillIds.set(s.code, row.id);
+    created.push(`skill:${s.code}`);
+  }
+
+  for (const c of certifications) {
+    const row = await prisma.certification.upsert({
+      where: { companyId_code: { companyId: company.id, code: c.code } },
+      update: {},
+      create: {
+        companyId: company.id,
+        name: c.name,
+        code: c.code,
+        validityPeriodDays: c.validityPeriodDays,
+      },
+    });
+    certificationIds.set(c.code, row.id);
+    created.push(`certification:${c.code}`);
+  }
+
+  const now = new Date();
+  const granteeEmails = ['employee@demo.com', 'supervisor@demo.com'];
+  for (const email of granteeEmails) {
+    const member = await prisma.employee.findFirst({
+      where: { companyId: company.id, email },
+      select: { id: true },
+    });
+    if (!member) continue;
+
+    await prisma.employeeSkill.createMany({
+      data: [skillIds.get('BARISTA')!, skillIds.get('CASH')!].map((skillId) => ({
+        employeeId: member.id,
+        skillId,
+        proficiencyLevel: 'advanced',
+      })),
+      skipDuplicates: true,
+    });
+
+    await prisma.employeeCertification.createMany({
+      data: [certificationIds.get('FOOD')!, certificationIds.get('FIRSTAID')!].map(
+        (certificationId) => ({
+          employeeId: member.id,
+          certificationId,
+          issuedAt: now,
+          expiresAt: new Date(now.getFullYear() + 1, now.getMonth(), now.getDate()),
+          issuer: 'Seeded catalog',
+        }),
+      ),
+      skipDuplicates: true,
+    });
+
+    created.push(`qualifications:${email}`);
   }
 }
 

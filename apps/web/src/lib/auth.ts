@@ -81,3 +81,18 @@ export const ROLES = {
   SHIFT_MANAGER: 'shift_manager',
   EMPLOYEE: 'employee',
 } as const;
+
+/** Display labels for UI role chips. */
+export const ROLE_LABELS: Record<string, string> = {
+  super_admin: 'Super Admin',
+  admin: 'Admin',
+  manager: 'Manager',
+  shift_manager: 'Supervisor',
+  employee: 'Employee',
+};
+
+/** Human-readable role label for a raw role code (unknown roles fall back to the code). */
+export function roleLabel(role: string): string {
+  const code = role.toLowerCase();
+  return ROLE_LABELS[code] ?? role;
+}

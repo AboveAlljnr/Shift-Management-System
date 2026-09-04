@@ -1,14 +1,15 @@
 ﻿'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Users } from 'lucide-react';
-import { useMemo, useState, type FormEvent } from 'react';
+import { Award, BadgeCheck, Users } from 'lucide-react';
+import { useMemo, useState, useEffect, type FormEvent } from 'react';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { Avatar } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
 import {
   Modal,
   ModalContent,
@@ -22,12 +23,20 @@ import {
   createEmployee,
   deactivateEmployee,
   fetchBranches,
+  fetchCertifications,
   fetchDepartments,
+  fetchEmployeeQualifications,
   fetchEmployees,
   fetchEmploymentTypes,
   fetchPositions,
+  fetchSkills,
+  setEmployeeCertifications,
+  setEmployeeSkills,
+  type EmployeeQualifications,
 } from '@/lib/api/queries';
+import { getAuthUser, hasRole } from '@/lib/auth';
 import { getInitials } from '@/lib/utils';
+import { format, parseISO } from 'date-fns';
 
 type NewEmployee = {
   employeeNumber: string;
@@ -61,6 +70,7 @@ export default function WorkforcePage() {
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState<NewEmployee>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
+  const [qualsEmployee, setQualsEmployee] = useState<{ id: string; firstName: string; lastName: string; employeeNumber: string } | null>(null);
 
   const { data: employees, isLoading } = useQuery({
     queryKey: ['employees', search],
@@ -179,6 +189,19 @@ export default function WorkforcePage() {
                       {[emp.branch?.name, emp.department?.name].filter(Boolean).join(' · ') || 'Unassigned'}
                     </span>
                     <StatusBadge status={emp.status} />
+                    <button
+                      onClick={() =>
+                        setQualsEmployee({
+                          id: emp.id,
+                          firstName: emp.firstName,
+                          lastName: emp.lastName,
+                          employeeNumber: emp.employeeNumber,
+                        })
+                      }
+                      className="text-xs font-medium text-brand hover:text-brand-dark hover:underline"
+                    >
+                      Qualifications
+                    </button>
                     {emp.status !== 'inactive' && (
                       <button
                         onClick={() => deactivate.mutate(emp.id)}
@@ -325,6 +348,13 @@ export default function WorkforcePage() {
           </form>
         </ModalContent>
       </Modal>
+
+      {qualsEmployee && (
+        <QualificationsModal
+          employee={qualsEmployee}
+          onClose={() => setQualsEmployee(null)}
+        />
+      )}
     </div>
   );
 }
@@ -349,5 +379,297 @@ function Field({
       </label>
       {children}
     </div>
+  );
+}
+
+function QualificationsModal({
+  employee,
+  onClose,
+}: {
+  employee: { id: string; firstName: string; lastName: string; employeeNumber: string };
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const canEdit = hasRole(getAuthUser(), ['admin', 'manager']);
+
+  const { data: quals, isLoading: qualsLoading } = useQuery({
+    queryKey: ['employeeQualifications', employee.id],
+    queryFn: () => fetchEmployeeQualifications(employee.id),
+  });
+  const { data: skillCatalog = [] } = useQuery({ queryKey: ['skills'], queryFn: fetchSkills });
+  const { data: certCatalog = [] } = useQuery({
+    queryKey: ['certifications'],
+    queryFn: fetchCertifications,
+  });
+
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  const activeSkills = skillCatalog.filter((s) => s.isActive);
+  const activeCerts = certCatalog.filter((c) => c.isActive);
+
+  const [skillDraft, setSkillDraft] = useState<Set<string>>(new Set());
+  const [certDraft, setCertDraft] = useState<
+    Map<string, { issuedAt: string; expiresAt: string; issuer?: string }>
+  >(new Map());
+  const [touched, setTouched] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!quals || touched) return;
+    setSkillDraft(new Set(quals.skills.map((s) => s.skillId)));
+    const newDraft = new Map<string, { issuedAt: string; expiresAt: string; issuer?: string }>();
+    for (const c of quals.certifications) {
+      newDraft.set(c.certificationId, {
+        issuedAt: (c.issuedAt ?? today).slice(0, 10),
+        expiresAt: c.expiresAt ? c.expiresAt.slice(0, 10) : '',
+        issuer: c.issuer ?? undefined,
+      });
+    }
+    setCertDraft(newDraft);
+    setTouched(true);
+  }, [quals, touched, today]);
+
+  const toggleSkill = (skillId: string) => {
+    setNotice(null);
+    setSkillDraft((prev) => {
+      const next = new Set(prev);
+      if (next.has(skillId)) next.delete(skillId);
+      else next.add(skillId);
+      return next;
+    });
+  };
+
+  const toggleCert = (certificationId: string) => {
+    setNotice(null);
+    setError(null);
+    setCertDraft((prev) => {
+      const next = new Map(prev);
+      if (next.has(certificationId)) {
+        next.delete(certificationId);
+      } else {
+        next.set(certificationId, {
+          issuedAt: today,
+          expiresAt: '',
+          issuer: undefined,
+        });
+      }
+      return next;
+    });
+  };
+
+  const setCertExpiry = (certificationId: string, expiresAt: string) => {
+    setCertDraft((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(certificationId);
+      if (existing) next.set(certificationId, { ...existing, expiresAt });
+      return next;
+    });
+  };
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const skills = [...skillDraft].map((skillId) => ({ skillId }));
+      const certifications = [...certDraft.entries()].map(([certificationId, meta]) => ({
+        certificationId,
+        issuedAt: new Date(meta.issuedAt + 'T00:00:00.000Z').toISOString(),
+        expiresAt: meta.expiresAt
+          ? new Date(meta.expiresAt + 'T00:00:00.000Z').toISOString()
+          : undefined,
+        issuer: meta.issuer || undefined,
+      }));
+      const [a, b] = await Promise.all([
+        setEmployeeSkills(employee.id, skills),
+        setEmployeeCertifications(employee.id, certifications),
+      ]);
+      return a && b;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['employeeQualifications', employee.id] });
+      queryClient.invalidateQueries({ queryKey: ['employees'] });
+      setNotice('Qualifications saved.');
+      setSaving(false);
+    },
+    onError: (e) => {
+      setError(e instanceof Error ? e.message : 'Unable to save qualifications');
+      setSaving(false);
+    },
+  });
+
+  const handleSave = () => {
+    setError(null);
+    setNotice(null);
+    setSaving(true);
+    if ([...certDraft.values()].some((c) => c.expiresAt && c.expiresAt < today)) {
+      setSaving(false);
+      setError('Expiry dates cannot be in the past.');
+      return;
+    }
+    save.mutate();
+  };
+
+  const isExpired = (expiresAt?: string | null) => !!expiresAt && new Date(expiresAt).getTime() < Date.now();
+
+  return (
+    <Modal open onOpenChange={(o) => !o && onClose()}>
+      <ModalContent className="max-w-2xl">
+        <ModalHeader>
+          <ModalTitle>Qualifications — {employee.firstName} {employee.lastName}</ModalTitle>
+          <ModalDescription>
+            Skills and certification records. These drive eligibility for open shifts and
+            required-coverage assignments.
+            {!canEdit && ' View only — asked a manager to edit.'}
+          </ModalDescription>
+        </ModalHeader>
+
+        {qualsLoading ? (
+          <div className="space-y-3">
+            <div className="h-8 animate-pulse rounded-lg bg-muted" />
+            <div className="h-8 animate-pulse rounded-lg bg-muted" />
+          </div>
+        ) : (
+          <div className="space-y-5 max-h-[50vh] overflow-y-auto pr-1">
+            <section>
+              <div className="mb-2 flex items-center gap-2">
+                <BadgeCheck size={16} className="text-brand" />
+                <h3 className="text-sm font-bold text-slate-800">Skills</h3>
+                <span className="text-xs text-slate-400">{skillDraft.size} selected</span>
+              </div>
+              {activeSkills.length === 0 ? (
+                <p className="text-xs text-slate-500">
+                  No skills in the catalog yet. A manager can add skills in the organization setup.
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {activeSkills.map((s) => {
+                    const selected = skillDraft.has(s.id);
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        disabled={!canEdit}
+                        onClick={() => toggleSkill(s.id)}
+                        className={
+                          selected
+                            ? 'inline-flex items-center gap-1 rounded-full bg-brand px-3 py-1 text-xs font-semibold text-white transition'
+                            : 'inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 transition hover:border-brand/50'
+                        }
+                      >
+                        {s.name}
+                        {selected && <BadgeCheck size={12} />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+
+            <section>
+              <div className="mb-2 flex items-center gap-2">
+                <Award size={16} className="text-brand" />
+                <h3 className="text-sm font-bold text-slate-800">Certifications</h3>
+                <span className="text-xs text-slate-400">{certDraft.size} selected</span>
+              </div>
+              {activeCerts.length === 0 ? (
+                <p className="text-xs text-slate-500">
+                  No certifications in the catalog yet. Food handling, safety, and similar
+                  credentials are configured by a manager.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {activeCerts.map((c) => {
+                    const meta = certDraft.get(c.id);
+                    const existing = quals?.certifications.find((x) => x.certificationId === c.id);
+                    const expired = meta
+                      ? meta.expiresAt && meta.expiresAt < today
+                      : isExpired(existing?.expiresAt);
+                    return (
+                      <div key={c.id} className="rounded-xl border border-slate-200 px-3 py-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={!canEdit}
+                              onClick={() => toggleCert(c.id)}
+                              className={
+                                meta
+                                  ? 'inline-flex items-center gap-1 rounded-full bg-brand px-3 py-1 text-xs font-semibold text-white transition'
+                                  : 'inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 transition hover:border-brand/50'
+                              }
+                            >
+                              {c.name}
+                              {meta && <BadgeCheck size={12} />}
+                            </button>
+                            {existing && isExpired(existing.expiresAt) && !meta && (
+                              <Badge variant="danger">Expired</Badge>
+                            )}
+                            {c.validityPeriodDays != null && (
+                              <span className="text-xs text-slate-400">
+                                valid {c.validityPeriodDays} days
+                              </span>
+                            )}
+                          </div>
+                          {existing && !meta && (
+                            <span className="text-xs text-slate-400">
+                              {existing.issuedAt
+                                ? `Issued ${format(parseISO(existing.issuedAt), 'MMM d, yyyy')}`
+                                : ''}
+                              {existing.expiresAt
+                                ? ` · expires ${format(parseISO(existing.expiresAt), 'MMM d, yyyy')}`
+                                : ''}
+                            </span>
+                          )}
+                        </div>
+                        {meta && (
+                          <div className="mt-2 flex flex-wrap items-center gap-3">
+                            <label className="flex items-center gap-2 text-xs text-slate-500">
+                              Expires
+                              <input
+                                type="date"
+                                value={meta.expiresAt}
+                                min={today}
+                                onChange={(e) => setCertExpiry(c.id, e.target.value)}
+                                className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                              />
+                            </label>
+                            <span className="text-xs text-slate-400">
+                              Issued today · leave expiry blank if it never expires
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
+        {(error || notice) && (
+          <div
+            className={
+              error
+                ? 'rounded-lg border border-red-300/40 bg-red-500/10 px-3 py-2 text-sm text-red-600'
+                : 'rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800'
+            }
+          >
+            {error ?? notice}
+          </div>
+        )}
+
+        <ModalFooter className="pt-2">
+          <ModalClose asChild>
+            <Button variant="secondary">Close</Button>
+          </ModalClose>
+          {canEdit && (
+            <Button onClick={handleSave} disabled={saving || save.isPending || qualsLoading}>
+              {saving || save.isPending ? 'Saving…' : 'Save qualifications'}
+            </Button>
+          )}
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
   );
 }

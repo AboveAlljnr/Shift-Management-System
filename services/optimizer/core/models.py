@@ -11,6 +11,11 @@ class EmployeeAvailability(BaseModel):
 
     max_hours_per_week: float = Field(default=40.0, ge=0)
     min_hours_per_week: float = Field(default=0.0, ge=0)
+    skills: list[str] = Field(default_factory=list)
+    """Skill IDs (or codes) held by the employee (active skills only)."""
+
+    certifications: list[str] = Field(default_factory=list)
+    """Certification IDs (or codes) held and not expired within the window."""
 
 
 class ShiftRequirement(BaseModel):
@@ -20,6 +25,8 @@ class ShiftRequirement(BaseModel):
     required_count: int = Field(ge=1)
     position_id: Optional[str] = None
     department_id: Optional[str] = None
+    required_skills: list[str] = Field(default_factory=list)
+    required_certifications: list[str] = Field(default_factory=list)
 
 
 class OptimizationRequest(BaseModel):

@@ -825,6 +825,7 @@ model Shift {
   isOvernight    Boolean     @default(false)
   isRecurring    Boolean     @default(false)
   recurrenceRule String?
+  isOpen         Boolean     @default(false)
   status         ShiftStatus @default(draft)
   notes          String?
   attachmentUrls String[]    @default([])

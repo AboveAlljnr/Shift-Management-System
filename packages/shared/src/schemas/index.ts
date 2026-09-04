@@ -83,6 +83,91 @@ export const PublishSchedulesSchema = z.object({
   notes: z.string().optional(),
 });
 
+// ---- Qualifications (skills + certifications catalogs) ----
+export const CreateSkillSchema = z.object({
+  name: z.string().min(1).max(120),
+  code: z.string().min(1).max(60),
+});
+
+export const UpdateSkillSchema = z.object({
+  name: z.string().min(1).max(120).optional(),
+  code: z.string().min(1).max(60).optional(),
+  isActive: z.boolean().optional(),
+});
+
+export const CreateCertificationSchema = z.object({
+  name: z.string().min(1).max(120),
+  code: z.string().min(1).max(60),
+  validityPeriodDays: z.number().int().positive().optional(),
+});
+
+export const UpdateCertificationSchema = z.object({
+  name: z.string().min(1).max(120).optional(),
+  code: z.string().min(1).max(60).optional(),
+  validityPeriodDays: z.number().int().positive().nullable().optional(),
+  isActive: z.boolean().optional(),
+});
+
+export const EmployeeSkillAssignmentSchema = z.object({
+  skillId: z.string().uuid(),
+  proficiencyLevel: z.string().max(60).optional(),
+});
+
+export const SetEmployeeSkillsSchema = z.object({
+  skills: z.array(EmployeeSkillAssignmentSchema).min(1),
+});
+
+export const EmployeeCertificationAssignmentSchema = z.object({
+  certificationId: z.string().uuid(),
+  issuedAt: z.string().datetime(),
+  expiresAt: z.string().datetime().optional(),
+  issuer: z.string().max(200).optional(),
+});
+
+export const SetEmployeeCertificationsSchema = z.object({
+  certifications: z.array(EmployeeCertificationAssignmentSchema).min(1),
+});
+
+// ---- Shift requirements (set/update on an existing shift) ----
+export const ShiftRequirementSchema = z.object({
+  headcount: z.number().int().min(1).default(1),
+  positionId: z.string().uuid().optional(),
+  branchConstraint: z.string().optional(),
+  skillIds: z.array(z.string().uuid()).optional(),
+  certificationIds: z.array(z.string().uuid()).optional(),
+});
+
+export const SetShiftRequirementsSchema = z.object({
+  requirements: z.array(ShiftRequirementSchema).optional(),
+});
+
+// ---- Open shifts ----
+export const OpenShiftRequestSchema = z.object({
+  shiftId: z.string().uuid(),
+  note: z.string().max(500).optional(),
+});
+
+export const OpenShiftReviewSchema = z.object({
+  action: z.enum(['approve', 'reject']),
+  note: z.string().max(500).optional(),
+});
+
+// ---- Shift swaps ----
+export const SwapRequestSchema = z.object({
+  shiftId: z.string().uuid(),
+  targetEmployeeId: z.string().uuid().optional(),
+  reason: z.string().max(500).optional(),
+});
+
+export const SwapRespondSchema = z.object({
+  action: z.enum(['accept', 'reject']),
+});
+
+export const SwapReviewSchema = z.object({
+  action: z.enum(['approve', 'reject']),
+  note: z.string().max(500).optional(),
+});
+
 // ---- Schedule management (publish / versions) ----
 export const CreateScheduleSchema = z.object({
   branchId: z.string().uuid().optional(),
@@ -261,6 +346,21 @@ export type CreateEmployeeDto = z.infer<typeof CreateEmployeeSchema>;
 export type UpdateEmployeeDto = z.infer<typeof UpdateEmployeeSchema>;
 export type CreateShiftDto = z.infer<typeof CreateShiftSchema>;
 export type UpdateShiftDto = z.infer<typeof UpdateShiftSchema>;
+export type CreateSkillDto = z.infer<typeof CreateSkillSchema>;
+export type UpdateSkillDto = z.infer<typeof UpdateSkillSchema>;
+export type CreateCertificationDto = z.infer<typeof CreateCertificationSchema>;
+export type UpdateCertificationDto = z.infer<typeof UpdateCertificationSchema>;
+export type EmployeeSkillAssignmentDto = z.infer<typeof EmployeeSkillAssignmentSchema>;
+export type SetEmployeeSkillsDto = z.infer<typeof SetEmployeeSkillsSchema>;
+export type EmployeeCertificationAssignmentDto = z.infer<typeof EmployeeCertificationAssignmentSchema>;
+export type SetEmployeeCertificationsDto = z.infer<typeof SetEmployeeCertificationsSchema>;
+export type ShiftRequirementDto = z.infer<typeof ShiftRequirementSchema>;
+export type SetShiftRequirementsDto = z.infer<typeof SetShiftRequirementsSchema>;
+export type OpenShiftRequestDto = z.infer<typeof OpenShiftRequestSchema>;
+export type OpenShiftReviewDto = z.infer<typeof OpenShiftReviewSchema>;
+export type SwapRequestDto = z.infer<typeof SwapRequestSchema>;
+export type SwapRespondDto = z.infer<typeof SwapRespondSchema>;
+export type SwapReviewDto = z.infer<typeof SwapReviewSchema>;
 export type AssignShiftDto = z.infer<typeof AssignShiftSchema>;
 export type ShiftConflictOverrideDto = z.infer<typeof ShiftConflictOverrideSchema>;
 export type PublishSchedulesDto = z.infer<typeof PublishSchedulesSchema>;

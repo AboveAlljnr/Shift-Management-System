@@ -52,6 +52,24 @@ def _rest_violation(a: ShiftRequirement, b: ShiftRequirement, min_rest_hours: fl
     return gap.total_seconds() / 3600 < min_rest_hours
 
 
+def _is_qualified(employee: EmployeeAvailability, shift: ShiftRequirement) -> bool:
+    """Qualification gate (defense-in-depth).
+
+    The API already prunes unqualified pairs before calling the solver; this
+    guard makes the solver itself unable to ever place a candidate onto a shift
+    that requires skills/certifications the candidate does not hold.
+    """
+    if not shift.required_skills and not shift.required_certifications:
+        return True
+    held_skills = set(employee.skills)
+    held_certs = set(employee.certifications)
+    if shift.required_skills and not held_skills.issuperset(shift.required_skills):
+        return False
+    if shift.required_certifications and not held_certs.issuperset(shift.required_certifications):
+        return False
+    return True
+
+
 def solve(request: OptimizationRequest) -> OptimizationResponse:
     t_start = time.perf_counter()
 
@@ -70,7 +88,12 @@ def solve(request: OptimizationRequest) -> OptimizationResponse:
         j = emp_idx[emp.employee_id]
         for sid in emp.available_shift_ids:
             if sid in shift_idx:
-                available[j].add(shift_idx[sid])
+                i = shift_idx[sid]
+                # Qualification gate: never allow assignment to a shift whose
+                # required skills/certifications the employee does not hold.
+                if not _is_qualified(emp, shifts[i]):
+                    continue
+                available[j].add(i)
 
     # Decision variables: x[i][j] = 1 if employee j is assigned to shift i
     x: dict[tuple[int, int], cp_model.IntVar] = {}

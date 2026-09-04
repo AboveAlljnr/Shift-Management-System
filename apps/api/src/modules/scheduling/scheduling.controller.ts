@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Body,
   Param,
   Query,
@@ -10,9 +11,14 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import {
   AssignShiftSchema,
   CreateShiftSchema,
+  OpenShiftReviewSchema,
   OptimizeApplySchema,
   OptimizeScheduleSchema,
+  SetShiftRequirementsSchema,
   ShiftConflictOverrideSchema,
+  SwapRequestSchema,
+  SwapRespondSchema,
+  SwapReviewSchema,
 } from '@sms/shared';
 import type {
   CreateShiftDto,
@@ -20,6 +26,11 @@ import type {
   ShiftConflictOverrideDto,
   OptimizeApplyDto,
   OptimizeScheduleDto,
+  OpenShiftReviewDto,
+  SetShiftRequirementsDto,
+  SwapRequestDto,
+  SwapRespondDto,
+  SwapReviewDto,
   User,
 } from '@sms/shared';
 
@@ -49,13 +60,45 @@ export class SchedulingController {
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
     @Query('status') status?: string,
+    @Query('isOpen') isOpen?: string,
     @CurrentUser() user?: AuthUser,
   ) {
     return this.schedulingService.findAll(
       companyId,
-      { branchId, departmentId, startDate, endDate, status },
+      {
+        branchId,
+        departmentId,
+        startDate,
+        endDate,
+        status,
+        isOpen: typeof isOpen === 'undefined' ? undefined : isOpen === 'true',
+      },
       user?.membershipId ?? '',
     );
+  }
+
+  @Get('my-requests')
+  @RequiredPermission('schedule.read')
+  @ApiOperation({ summary: 'Current employee\'s own open-shift and swap requests (self-service ledger)' })
+  async findMyRequests(
+    @CompanyId() companyId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.schedulingService.findMyRequests(companyId, user.id);
+  }
+
+  @Get('open-requests')
+  @RequiredPermission('schedule.read')
+  @ApiOperation({ summary: 'List open-shift requests for review' })
+  async listOpenShiftRequests(@CompanyId() companyId: string) {
+    return this.schedulingService.listOpenShiftRequests(companyId);
+  }
+
+  @Get('swaps')
+  @RequiredPermission('schedule.read')
+  @ApiOperation({ summary: 'List shift swap requests for review' })
+  async listSwapRequests(@CompanyId() companyId: string) {
+    return this.schedulingService.listSwapRequests(companyId);
   }
 
   @Get(':id')
@@ -77,6 +120,18 @@ export class SchedulingController {
     @Body(new ZodValidationPipe(CreateShiftSchema)) dto: CreateShiftDto,
   ) {
     return this.schedulingService.create(companyId, dto);
+  }
+
+  @Patch(':id/requirements')
+  @RequiredPermission('shift.assign')
+  @ApiOperation({ summary: 'Replace a shift\'s coverage requirements (headcount, skills, certifications)' })
+  async setRequirements(
+    @CompanyId() companyId: string,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(SetShiftRequirementsSchema)) dto: SetShiftRequirementsDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.schedulingService.setShiftRequirements(companyId, id, dto, user.id);
   }
 
   @Post('optimize')
@@ -155,5 +210,76 @@ export class SchedulingController {
     @CurrentUser() user: User,
   ) {
     return this.schedulingService.publishSchedule(companyId, scheduleId, user.id, notes);
+  }
+
+  @Post(':id/open')
+  @RequiredPermission('shift.assign')
+  @ApiOperation({ summary: 'Mark a shift as open (or close it) so employees can self-request it' })
+  async setShiftOpen(
+    @CompanyId() companyId: string,
+    @Param('id') id: string,
+    @Body('isOpen') isOpen: boolean,
+    @CurrentUser() user: User,
+  ) {
+    return this.schedulingService.setShiftOpen(companyId, id, isOpen === true, user.id);
+  }
+
+  @Post(':id/open-request')
+  @RequiredPermission('schedule.read')
+  @ApiOperation({ summary: 'Request an open shift (employee self-service, qualification-gated)' })
+  async requestOpenShift(
+    @CompanyId() companyId: string,
+    @Param('id') id: string,
+    @Body('note') note: string | undefined,
+    @CurrentUser() user: User,
+  ) {
+    return this.schedulingService.requestOpenShift(companyId, { shiftId: id, note }, user.id);
+  }
+
+  @Post('open-requests/:requestId/review')
+  @RequiredPermission('shift.assign')
+  @ApiOperation({ summary: 'Approve or reject an open-shift request' })
+  async reviewOpenShiftRequest(
+    @CompanyId() companyId: string,
+    @Param('requestId') requestId: string,
+    @Body(new ZodValidationPipe(OpenShiftReviewSchema)) dto: OpenShiftReviewDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.schedulingService.reviewOpenShiftRequest(companyId, requestId, dto, user.id);
+  }
+
+  @Post('swap-requests')
+  @RequiredPermission('schedule.read')
+  @ApiOperation({ summary: 'Request a shift swap (employee self-service)' })
+  async requestSwap(
+    @CompanyId() companyId: string,
+    @Body(new ZodValidationPipe(SwapRequestSchema)) dto: SwapRequestDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.schedulingService.requestSwap(companyId, dto, user.id);
+  }
+
+  @Post('swaps/:requestId/respond')
+  @RequiredPermission('schedule.read')
+  @ApiOperation({ summary: 'Accept or reject an incoming swap request (employee self-service)' })
+  async respondSwap(
+    @CompanyId() companyId: string,
+    @Param('requestId') requestId: string,
+    @Body(new ZodValidationPipe(SwapRespondSchema)) dto: SwapRespondDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.schedulingService.respondSwap(companyId, requestId, dto, user.id);
+  }
+
+  @Post('swaps/:requestId/review')
+  @RequiredPermission('shift.assign')
+  @ApiOperation({ summary: 'Approve or reject an accepted swap (manager)' })
+  async reviewSwap(
+    @CompanyId() companyId: string,
+    @Param('requestId') requestId: string,
+    @Body(new ZodValidationPipe(SwapReviewSchema)) dto: SwapReviewDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.schedulingService.reviewSwap(companyId, requestId, dto, user.id);
   }
 }

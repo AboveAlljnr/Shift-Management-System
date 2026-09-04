@@ -195,6 +195,7 @@ export interface Shift {
   notes?: string;
   attachmentUrls: string[];
   publishedAt?: ISODateString;
+  isOpen?: boolean;
   createdAt: ISODateString;
   updatedAt: ISODateString;
 }
@@ -218,7 +219,105 @@ export interface ShiftConflictOverride {
   reason: string;
   overriddenById: UUID;
   overriddenAt: ISODateString;
-  metadata?: Record<string, unknown>;
+}
+
+// ---- Qualifications (skills + certifications) ----
+export interface Skill {
+  id: UUID;
+  companyId: UUID;
+  name: string;
+  code: string;
+  isActive: boolean;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface Certification {
+  id: UUID;
+  companyId: UUID;
+  name: string;
+  code: string;
+  validityPeriodDays?: number;
+  isActive: boolean;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface EmployeeSkill {
+  id: UUID;
+  employeeId: UUID;
+  skillId: UUID;
+  proficiencyLevel?: string;
+  verifiedAt?: ISODateString;
+  verifiedBy?: UUID;
+  skill?: Skill;
+}
+
+export interface EmployeeCertification {
+  id: UUID;
+  employeeId: UUID;
+  certificationId: UUID;
+  issuedAt: ISODateString;
+  expiresAt?: ISODateString;
+  issuer?: string;
+  documentUrl?: string;
+  certification?: Certification;
+}
+
+// ---- Shift swaps ----
+export interface ShiftSwapRequest {
+  id: UUID;
+  companyId: UUID;
+  shiftId: UUID;
+  requestingEmployeeId: UUID;
+  targetEmployeeId?: UUID;
+  status: SwapRequestStatus;
+  reason?: string;
+  resolvedById?: UUID;
+  resolvedAt?: ISODateString;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+// ---- Open shifts ----
+export interface OpenShiftRequest {
+  id: UUID;
+  companyId: UUID;
+  shiftId: UUID;
+  employeeId: UUID;
+  status: OpenShiftStatus;
+  resolvedById?: UUID;
+  resolvedAt?: ISODateString;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+// ---- Schedule explainability (ADR-006) ----
+export type ExclusionReasonCode =
+  | 'APPROVED_LEAVE'
+  | 'UNAVAILABLE'
+  | 'SHIFT_OVERLAP'
+  | 'MIN_REST'
+  | 'WEEKLY_HOURS'
+  | 'MISSING_SKILL'
+  | 'MISSING_CERTIFICATION'
+  | 'EXPIRED_CERTIFICATION'
+  | 'OUT_OF_SCOPE'
+  | 'NO_ELIGIBLE_EMPLOYEE';
+
+export interface ExclusionReasonCount {
+  code: ExclusionReasonCode;
+  count: number;
+}
+
+export interface ScheduleExplanation {
+  employeesConsidered: number;
+  employeesExcluded: number;
+  proposedAssignments: number;
+  fullyCoveredShifts: number;
+  partiallyCoveredShifts: number;
+  unfilledShifts: number;
+  exclusionReasons: ExclusionReasonCount[];
 }
 
 export interface Schedule {

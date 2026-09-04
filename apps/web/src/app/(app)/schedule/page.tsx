@@ -1,13 +1,14 @@
 ﻿'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Calendar, Plus, Sparkles } from 'lucide-react';
+import { Calendar, Inbox, Plus, RefreshCw, Sparkles } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
 import { Card, CardContent } from '@/components/ui/card';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
 import {
   Modal,
   ModalContent,
@@ -23,19 +24,34 @@ import {
   createSchedule,
   createShift,
   fetchBranches,
+  fetchCertifications,
   fetchDepartments,
   fetchEmployees,
   fetchScheduleVersions,
   fetchSchedules,
   fetchShifts,
+  fetchSkills,
   generateScheduleSuggestions,
+  listOpenShiftRequests,
+  listSwapRequests,
   publishSchedule,
+  reviewOpenShiftRequest,
+  reviewSwap,
+  setShiftOpen,
+  updateShiftRequirements,
+  type CertificationCatalogItem,
+  type OpenShiftRequestRow,
   type ScheduleDetail,
+  type ScheduleExplanation,
   type ScheduleSuggestion,
   type ScheduleVersion,
   type ShiftDetail,
+  type ShiftRequirementInput,
+  type SkillCatalogItem,
   type SuggestedAssignment,
+  type SwapRequestRow,
 } from '@/lib/api/queries';
+import { getAuthUser, hasRole } from '@/lib/auth';
 import { formatTime } from '@/lib/utils';
 import { format, parseISO } from 'date-fns';
 
@@ -57,8 +73,22 @@ function extractConflicts(err: unknown): { message: string; conflicts?: Conflict
 const inputClass =
   'w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand transition';
 
+const EXCLUSION_LABELS: Record<string, string> = {
+  APPROVED_LEAVE: 'Approved leave',
+  UNAVAILABLE: 'Unavailable',
+  SHIFT_OVERLAP: 'Shift overlap',
+  MIN_REST: 'Minimum rest not met',
+  WEEKLY_HOURS: 'Weekly hours exceeded',
+  MISSING_SKILL: 'Missing required skill',
+  MISSING_CERTIFICATION: 'Missing required certification',
+  EXPIRED_CERTIFICATION: 'Certification expired',
+  OUT_OF_SCOPE: 'Outside scope',
+  NO_ELIGIBLE_EMPLOYEE: 'No eligible employee',
+};
+
 export default function SchedulePage() {
   const queryClient = useQueryClient();
+  const canReview = hasRole(getAuthUser(), ['admin', 'manager', 'shift_manager']);
 
   const { data: shifts, isLoading } = useQuery({
     queryKey: ['shifts'],
@@ -69,10 +99,14 @@ export default function SchedulePage() {
   const { data: branches } = useQuery({ queryKey: ['branches'], queryFn: fetchBranches });
   const { data: departments } = useQuery({ queryKey: ['departments'], queryFn: fetchDepartments });
   const { data: employees } = useQuery({ queryKey: ['employees'], queryFn: () => fetchEmployees({ limit: 100 }) });
+  const { data: skillCatalog = [] } = useQuery({ queryKey: ['skills'], queryFn: fetchSkills });
+  const { data: certCatalog = [] } = useQuery({ queryKey: ['certifications'], queryFn: fetchCertifications });
 
   const [showCreate, setShowCreate] = useState(false);
   const [showGenerate, setShowGenerate] = useState(false);
   const [showSchedules, setShowSchedules] = useState(false);
+  const [showOpenRequests, setShowOpenRequests] = useState(false);
+  const [showSwapRequests, setShowSwapRequests] = useState(false);
   const [form, setForm] = useState({
     name: '',
     branchId: '',
@@ -80,6 +114,7 @@ export default function SchedulePage() {
     startAt: '',
     endAt: '',
     notes: '',
+    requirements: [{ headcount: '1', skillIds: [] as string[], certificationIds: [] as string[] }],
   });
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -92,11 +127,16 @@ export default function SchedulePage() {
         startAt: new Date(form.startAt).toISOString(),
         endAt: new Date(form.endAt).toISOString(),
         notes: form.notes || undefined,
+        requirements: form.requirements.map((r) => ({
+          headcount: parseInt(r.headcount, 10) || 1,
+          skillIds: r.skillIds,
+          certificationIds: r.certificationIds,
+        })),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['shifts'] });
       setShowCreate(false);
-      setForm({ name: '', branchId: '', departmentId: '', startAt: '', endAt: '', notes: '' });
+      setForm({ name: '', branchId: '', departmentId: '', startAt: '', endAt: '', notes: '', requirements: [{ headcount: '1', skillIds: [], certificationIds: [] }] });
       setFormError(null);
     },
     onError: (e) => setFormError(e instanceof Error ? e.message : 'Unable to create shift'),
@@ -130,6 +170,18 @@ export default function SchedulePage() {
             <Sparkles size={14} className="text-brand" />
             Smart Schedule Optimizer
           </Button>
+          {canReview && (
+            <>
+              <Button variant="secondary" size="sm" onClick={() => setShowOpenRequests(true)} className="gap-2">
+                <Inbox size={14} className="text-brand" />
+                Open shift requests
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setShowSwapRequests(true)} className="gap-2">
+                <RefreshCw size={14} className="text-brand" />
+                Swap requests
+              </Button>
+            </>
+          )}
           <Button variant="primary" size="sm" onClick={() => setShowCreate(true)} className="gap-2">
             <Plus size={14} />
             New shift
@@ -165,6 +217,9 @@ export default function SchedulePage() {
                     shift={shift}
                     employees={employees?.data ?? []}
                     departments={departments ?? []}
+                    skillCatalog={skillCatalog}
+                    certCatalog={certCatalog}
+                    canReview={canReview}
                   />
                 ))}
               </div>
@@ -248,6 +303,51 @@ export default function SchedulePage() {
               />
             </div>
 
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-slate-700">Coverage requirements</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() =>
+                    setForm((f) => ({
+                      ...f,
+                      requirements: [...f.requirements, { headcount: '1', skillIds: [], certificationIds: [] }],
+                    }))
+                  }
+                >
+                  + Add requirement
+                </Button>
+              </div>
+              {form.requirements.map((req, idx) => (
+                <RequirementEditor
+                  key={idx}
+                  index={idx}
+                  req={req}
+                  skillCatalog={skillCatalog}
+                  certCatalog={certCatalog}
+                  onChange={(next) =>
+                    setForm((f) => {
+                      const requirements = f.requirements.map((r, i) => (i === idx ? next : r));
+                      return { ...f, requirements };
+                    })
+                  }
+                  onRemove={() =>
+                    setForm((f) => ({
+                      ...f,
+                      requirements: f.requirements.filter((_, i) => i !== idx),
+                    }))
+                  }
+                />
+              ))}
+              {form.requirements.length > 0 && (
+                <p className="text-xs text-slate-400">
+                  Requirements gate eligibility: only employees holding the selected skills or
+                  certifications can be assigned or request this shift.
+                </p>
+              )}
+            </div>
+
             {formError && (
               <div className="rounded-lg border border-red-300/40 bg-red-500/10 px-3 py-2 text-sm text-red-600">
                 {formError}
@@ -281,6 +381,14 @@ export default function SchedulePage() {
           branches={branches ?? []}
           onClose={() => setShowSchedules(false)}
         />
+      )}
+
+      {showOpenRequests && (
+        <OpenShiftRequestsDialog onClose={() => setShowOpenRequests(false)} />
+      )}
+
+      {showSwapRequests && (
+        <SwapRequestsDialog onClose={() => setShowSwapRequests(false)} />
       )}
     </div>
   );
@@ -457,6 +565,10 @@ function GenerateSuggestionsDialog({
                 <Metric label="Hard conflicts dropped" value={String(suggestion.droppedBlocking)} />
               </div>
 
+              {suggestion.explanation && (
+                <WhyThisSchedule explanation={suggestion.explanation} />
+              )}
+
               {suggestion.suggestedCount === 0 ? (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">
                   No suggestions were produced. Adjust the range or check employee availability and approved leave.
@@ -530,6 +642,137 @@ function Metric({ label, value }: { label: string; value: string }) {
       <p className="text-2xl font-bold text-slate-900 font-sans">{value}</p>
       <p className="text-xs text-slate-500">{label}</p>
     </Card>
+  );
+}
+
+function WhyThisSchedule({ explanation }: { explanation: ScheduleExplanation }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3">
+      <p className="text-sm font-bold text-slate-700">Why this schedule?</p>
+      <p className="mt-0.5 text-xs text-slate-500">
+        The optimizer considered {explanation.employeesConsidered} employee
+        {explanation.employeesConsidered === 1 ? '' : 's'} and excluded {
+          explanation.employeesExcluded
+        }{' '}
+        for the shifts below. Coverage reflects {explanation.proposedAssignments} proposed
+        assignment{explanation.proposedAssignments === 1 ? '' : 's'} (
+        {explanation.fullyCoveredShifts} fully covered, {explanation.partiallyCoveredShifts} partially
+        covered, {explanation.unfilledShifts} unfilled).
+      </p>
+      {explanation.exclusionReasons.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {explanation.exclusionReasons.map((r) => (
+            <Badge key={r.code} variant="neutral" className="gap-1">
+              {EXCLUSION_LABELS[r.code] ?? r.code}
+              <span className="font-bold text-slate-700">×{r.count}</span>
+            </Badge>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-2 text-xs text-slate-400">No exclusions — everyone eligible was considered.</p>
+      )}
+    </div>
+  );
+}
+
+function RequirementEditor({
+  index,
+  req,
+  skillCatalog,
+  certCatalog,
+  onChange,
+  onRemove,
+}: {
+  index: number;
+  req: { headcount: string; skillIds: string[]; certificationIds: string[] };
+  skillCatalog: SkillCatalogItem[];
+  certCatalog: CertificationCatalogItem[];
+  onChange: (next: { headcount: string; skillIds: string[]; certificationIds: string[] }) => void;
+  onRemove: () => void;
+}) {
+  const toggle = (key: 'skillIds' | 'certificationIds', id: string) => {
+    const current = req[key];
+    onChange({
+      ...req,
+      [key]: current.includes(id) ? current.filter((x) => x !== id) : [...current, id],
+    });
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-200 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <label className="text-xs font-semibold text-slate-500">Requirement {index + 1}</label>
+        {index > 0 && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="text-xs font-medium text-red-600 hover:underline"
+          >
+            Remove
+          </button>
+        )}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <label className="text-xs text-slate-500">Headcount</label>
+        <input
+          type="number"
+          min={1}
+          value={req.headcount}
+          onChange={(e) => onChange({ ...req, headcount: e.target.value })}
+          className="w-20 rounded-lg border border-slate-200 px-2 py-1 text-sm"
+        />
+      </div>
+      <div className="mt-2">
+        <p className="mb-1 text-xs font-semibold text-slate-500">Required skills</p>
+        <div className="flex flex-wrap gap-1.5">
+          {skillCatalog.filter((s) => s.isActive).map((s) => {
+            const selected = req.skillIds.includes(s.id);
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => toggle('skillIds', s.id)}
+                className={
+                  selected
+                    ? 'rounded-full bg-brand px-2.5 py-1 text-xs font-semibold text-white transition'
+                    : 'rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:border-brand/50'
+                }
+              >
+                {s.name}
+              </button>
+            );
+          })}
+          {skillCatalog.filter((s) => s.isActive).length === 0 && (
+            <span className="text-xs text-slate-400">No skills in the catalog.</span>
+          )}
+        </div>
+      </div>
+      <div className="mt-2">
+        <p className="mb-1 text-xs font-semibold text-slate-500">Required certifications</p>
+        <div className="flex flex-wrap gap-1.5">
+          {certCatalog.filter((c) => c.isActive).map((c) => {
+            const selected = req.certificationIds.includes(c.id);
+            return (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => toggle('certificationIds', c.id)}
+                className={
+                  selected
+                    ? 'rounded-full bg-brand px-2.5 py-1 text-xs font-semibold text-white transition'
+                    : 'rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:border-brand/50'
+                }
+              >
+                {c.name}
+              </button>
+            );
+          })}
+          {certCatalog.filter((c) => c.isActive).length === 0 && (
+            <span className="text-xs text-slate-400">No certifications in the catalog.</span>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -830,15 +1073,23 @@ function ShiftCard({
   shift,
   employees,
   departments,
+  skillCatalog,
+  certCatalog,
+  canReview,
 }: {
   shift: ShiftDetail;
   employees: { id: string; firstName: string; lastName: string }[];
   departments: { id: string; name: string }[];
+  skillCatalog: SkillCatalogItem[];
+  certCatalog: CertificationCatalogItem[];
+  canReview: boolean;
 }) {
   const queryClient = useQueryClient();
   const [assigning, setAssigning] = useState(false);
   const [employeeId, setEmployeeId] = useState('');
   const [result, setResult] = useState<{ message?: string; conflicts?: ConflictItem[]; warnings?: ConflictItem[] } | null>(null);
+  const [showEditRequirements, setShowEditRequirements] = useState(false);
+  const [openNotice, setOpenNotice] = useState<string | null>(null);
 
   const assign = useMutation({
     mutationFn: () => assignEmployeeToShift(shift.id, { employeeId }),
@@ -853,7 +1104,21 @@ function ShiftCard({
     },
   });
 
+  const toggleOpen = useMutation({
+    mutationFn: () => setShiftOpen(shift.id, !shift.isOpen),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
+      setOpenNotice(
+        res.isOpen
+          ? `Shift opened — notified ${res.notifiedEmployees} eligible employee${res.notifiedEmployees === 1 ? '' : 's'}.`
+          : 'Shift closed to new requests.',
+      );
+    },
+    onError: (e) => setOpenNotice(e instanceof Error ? e.message : 'Unable to update shift'),
+  });
+
   const deptName = departments.find((d) => d.id === shift.departmentId)?.name;
+  const totalRequired = shift.requirements.reduce((sum, r) => sum + r.headcount, 0);
 
   return (
     <Card className="shift-card">
@@ -862,12 +1127,30 @@ function ShiftCard({
           <div className="flex flex-wrap items-center gap-2">
             <p className="font-semibold text-slate-800">{shift.name}</p>
             <StatusBadge status={shift.status} />
+            {shift.isOpen && canReview && (
+              <Badge variant="brand">Open for requests</Badge>
+            )}
           </div>
           <p className="text-sm text-slate-500 font-mono">
             {formatTime(shift.startAt)} – {formatTime(shift.endAt)}
             {shift.branch ? ` · ${shift.branch.name}` : ''}
             {deptName ? ` · ${deptName}` : ''}
           </p>
+          {shift.requirements.length > 0 && (
+            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+              <Badge variant="draft">Needs {totalRequired}</Badge>
+              {shift.requirements.flatMap((r) => r.skills ?? []).map((s) => (
+                <Badge key={`skill-${s.skill.id}`} variant="info">
+                  {s.skill.name}
+                </Badge>
+              ))}
+              {shift.requirements.flatMap((r) => r.certifications ?? []).map((c) => (
+                <Badge key={`cert-${c.certification.id}`} variant="warning">
+                  {c.certification.name}
+                </Badge>
+              ))}
+            </div>
+          )}
           {shift.coverage && shift.coverage.headcountRequired > 0 && (
             <p className="mt-1 flex items-center gap-2 text-xs">
               <CoverageBadge coverage={shift.coverage} />
@@ -885,9 +1168,27 @@ function ShiftCard({
               ))}
             </div>
           )}
+          {openNotice && (
+            <p className="mt-1 text-xs text-slate-500">{openNotice}</p>
+          )}
         </div>
 
         <div className="flex shrink-0 flex-col items-end gap-2">
+          {canReview && (
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => toggleOpen.mutate()}
+                disabled={toggleOpen.isPending}
+              >
+                {shift.isOpen ? 'Close to requests' : 'Open to requests'}
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setShowEditRequirements(true)}>
+                Requirements
+              </Button>
+            </div>
+          )}
           <Button variant="secondary" size="sm" onClick={() => setAssigning((v) => !v)}>
             {assigning ? 'Cancel' : 'Assign'}
           </Button>
@@ -928,6 +1229,15 @@ function ShiftCard({
           ))}
         </div>
       )}
+
+      {showEditRequirements && (
+        <ShiftRequirementsDialog
+          shift={shift}
+          skillCatalog={skillCatalog}
+          certCatalog={certCatalog}
+          onClose={() => setShowEditRequirements(false)}
+        />
+      )}
     </Card>
   );
 }
@@ -961,4 +1271,373 @@ function CoverageBadge({ coverage }: { coverage: NonNullable<ShiftDetail['covera
 
 function cn(...inputs: (string | false | undefined | null)[]): string {
   return inputs.filter(Boolean).join(' ');
+}
+
+function ShiftRequirementsDialog({
+  shift,
+  skillCatalog,
+  certCatalog,
+  onClose,
+}: {
+  shift: ShiftDetail;
+  skillCatalog: SkillCatalogItem[];
+  certCatalog: CertificationCatalogItem[];
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [rows, setRows] = useState<
+    { headcount: string; skillIds: string[]; certificationIds: string[] }[]
+  >(
+    () =>
+      shift.requirements.length > 0
+        ? shift.requirements.map((r) => ({
+            headcount: String(r.headcount),
+            skillIds: (r.skills ?? []).map((s) => s.skill.id),
+            certificationIds: (r.certifications ?? []).map((c) => c.certification.id),
+          }))
+        : [{ headcount: '1', skillIds: [], certificationIds: [] }],
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const save = useMutation({
+    mutationFn: () =>
+      updateShiftRequirements(
+        shift.id,
+        rows.map((r): ShiftRequirementInput => ({
+          headcount: parseInt(r.headcount, 10) || 1,
+          skillIds: r.skillIds,
+          certificationIds: r.certificationIds,
+        })),
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
+      setNotice('Requirements updated.');
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : 'Unable to update requirements'),
+  });
+
+  const activeSkills = skillCatalog.filter((s) => s.isActive);
+  const activeCerts = certCatalog.filter((c) => c.isActive);
+
+  return (
+    <Modal open onOpenChange={(o) => !o && onClose()}>
+      <ModalContent className="max-w-xl">
+        <ModalHeader>
+          <ModalTitle>Requirements — {shift.name}</ModalTitle>
+          <ModalDescription>
+            Set headcount and required skills/certifications. Eligibility for assignment and open-shift
+            requests is derived from these.
+          </ModalDescription>
+        </ModalHeader>
+        <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
+          {rows.map((row, idx) => (
+            <div key={idx} className="rounded-xl border border-slate-200 p-3">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-slate-500">Requirement {idx + 1}</label>
+                {rows.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setRows((rs) => rs.filter((_, i) => i !== idx))}
+                    className="text-xs font-medium text-red-600 hover:underline"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <label className="text-xs text-slate-500">Headcount</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={row.headcount}
+                  onChange={(e) =>
+                    setRows((rs) => rs.map((r, i) => (i === idx ? { ...r, headcount: e.target.value } : r)))
+                  }
+                  className="w-20 rounded-lg border border-slate-200 px-2 py-1 text-sm"
+                />
+              </div>
+              <div className="mt-2">
+                <p className="mb-1 text-xs font-semibold text-slate-500">Required skills</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {activeSkills.map((s) => {
+                    const selected = row.skillIds.includes(s.id);
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() =>
+                          setRows((rs) =>
+                            rs.map((r, i) =>
+                              i === idx
+                                ? {
+                                    ...r,
+                                    skillIds: selected
+                                      ? r.skillIds.filter((x) => x !== s.id)
+                                      : [...r.skillIds, s.id],
+                                  }
+                                : r,
+                            ),
+                          )
+                        }
+                        className={
+                          selected
+                            ? 'rounded-full bg-brand px-2.5 py-1 text-xs font-semibold text-white transition'
+                            : 'rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:border-brand/50'
+                        }
+                      >
+                        {s.name}
+                      </button>
+                    );
+                  })}
+                  {activeSkills.length === 0 && (
+                    <span className="text-xs text-slate-400">No skills in the catalog.</span>
+                  )}
+                </div>
+              </div>
+              <div className="mt-2">
+                <p className="mb-1 text-xs font-semibold text-slate-500">Required certifications</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {activeCerts.map((c) => {
+                    const selected = row.certificationIds.includes(c.id);
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() =>
+                          setRows((rs) =>
+                            rs.map((r, i) =>
+                              i === idx
+                                ? {
+                                    ...r,
+                                    certificationIds: selected
+                                      ? r.certificationIds.filter((x) => x !== c.id)
+                                      : [...r.certificationIds, c.id],
+                                  }
+                                : r,
+                            ),
+                          )
+                        }
+                        className={
+                          selected
+                            ? 'rounded-full bg-brand px-2.5 py-1 text-xs font-semibold text-white transition'
+                            : 'rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:border-brand/50'
+                        }
+                      >
+                        {c.name}
+                      </button>
+                    );
+                  })}
+                  {activeCerts.length === 0 && (
+                    <span className="text-xs text-slate-400">No certifications in the catalog.</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+          <Button variant="secondary" size="sm" onClick={() => setRows((rs) => [...rs, { headcount: '1', skillIds: [], certificationIds: [] }])}>
+            + Add requirement
+          </Button>
+        </div>
+
+        {(error || notice) && (
+          <div
+            className={
+              error
+                ? 'rounded-lg border border-red-300/40 bg-red-500/10 px-3 py-2 text-sm text-red-600'
+                : 'rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800'
+            }
+          >
+            {error ?? notice}
+          </div>
+        )}
+
+        <ModalFooter className="pt-2">
+          <ModalClose asChild>
+            <Button variant="secondary" onClick={onClose}>Close</Button>
+          </ModalClose>
+          <Button onClick={() => save.mutate()} disabled={save.isPending}>
+            {save.isPending ? 'Saving…' : 'Save requirements'}
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+}
+
+function OpenShiftRequestsDialog({ onClose }: { onClose: () => void }) {
+  const queryClient = useQueryClient();
+
+  const { data: requests, isLoading } = useQuery({
+    queryKey: ['shifts-open-requests'],
+    queryFn: listOpenShiftRequests,
+    refetchInterval: 15 * 1000,
+  });
+
+  const review = useMutation({
+    mutationFn: ({
+      requestId,
+      action,
+    }: {
+      requestId: string;
+      action: 'approve' | 'reject';
+    }) => reviewOpenShiftRequest(requestId, { action }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['shifts-open-requests'] });
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
+    },
+    onError: (e) => {
+      queryClient.invalidateQueries({ queryKey: ['shifts-open-requests'] });
+      setError(e instanceof Error ? e.message : 'Unable to review request');
+    },
+  });
+
+  const [error, setError] = useState<string | null>(null);
+  const pending = (requests ?? []).filter((r) => r.status === 'pending');
+
+  return (
+    <Modal open onOpenChange={(o) => !o && onClose()}>
+      <ModalContent className="max-w-2xl">
+        <ModalHeader>
+          <ModalTitle>Open shift requests</ModalTitle>
+          <ModalDescription>
+            Employees who requested an open shift. Approve to assign them (eligibility is
+            re-validated), or reject.
+          </ModalDescription>
+        </ModalHeader>
+
+        {isLoading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 2 }).map((_, i) => (
+              <div key={i} className="h-14 animate-pulse rounded-xl bg-slate-200/60" />
+            ))}
+          </div>
+        ) : pending.length === 0 ? (
+          <p className="text-sm text-slate-500">No pending open-shift requests.</p>
+        ) : (
+          <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
+            {pending.map((r) => (
+              <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 px-3 py-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">
+                    {r.employee.firstName} {r.employee.lastName}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {r.shift.name} · {format(parseISO(r.shift.startAt), 'MMM d, h:mm a')}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="secondary" size="sm" onClick={() => review.mutate({ requestId: r.id, action: 'reject' })}>
+                    Reject
+                  </Button>
+                  <Button size="sm" onClick={() => review.mutate({ requestId: r.id, action: 'approve' })}>
+                    Approve
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {error && (
+          <div className="rounded-lg border border-red-300/40 bg-red-500/10 px-3 py-2 text-sm text-red-600">
+            {error}
+          </div>
+        )}
+
+        <ModalFooter className="pt-2">
+          <Button variant="secondary" onClick={onClose}>Close</Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+}
+
+function SwapRequestsDialog({ onClose }: { onClose: () => void }) {
+  const queryClient = useQueryClient();
+
+  const { data: requests, isLoading } = useQuery({
+    queryKey: ['shifts-swap-requests'],
+    queryFn: listSwapRequests,
+    refetchInterval: 15 * 1000,
+  });
+
+  const [error, setError] = useState<string | null>(null);
+
+  const review = useMutation({
+    mutationFn: ({ requestId, action }: { requestId: string; action: 'approve' | 'reject' }) =>
+      reviewSwap(requestId, { action }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['shifts-swap-requests'] });
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
+    },
+    onError: (e) => {
+      queryClient.invalidateQueries({ queryKey: ['shifts-swap-requests'] });
+      setError(e instanceof Error ? e.message : 'Unable to review swap');
+    },
+  });
+
+  const active = (requests ?? []).filter((r) => r.status === 'pending' || r.status === 'accepted');
+
+  return (
+    <Modal open onOpenChange={(o) => !o && onClose()}>
+      <ModalContent className="max-w-2xl">
+        <ModalHeader>
+          <ModalTitle>Shift swap requests</ModalTitle>
+          <ModalDescription>
+            Accepted swaps are ready for your approval. Pending swaps are still awaiting the target
+            employee&apos;s response.
+          </ModalDescription>
+        </ModalHeader>
+
+        {isLoading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 2 }).map((_, i) => (
+              <div key={i} className="h-14 animate-pulse rounded-xl bg-slate-200/60" />
+            ))}
+          </div>
+        ) : active.length === 0 ? (
+          <p className="text-sm text-slate-500">No swap requests requiring attention.</p>
+        ) : (
+          <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
+            {active.map((r) => (
+              <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 px-3 py-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">
+                    {r.requestingEmployee.firstName} {r.requestingEmployee.lastName} →{' '}
+                    {r.targetEmployee ? `${r.targetEmployee.firstName} ${r.targetEmployee.lastName}` : 'Any colleague'}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {r.shift.name} · {format(parseISO(r.shift.startAt), 'MMM d, h:mm a')} ·{' '}
+                    {r.status === 'accepted' ? 'Accepted — awaiting approval' : 'Pending target response'}
+                  </p>
+                  {r.reason && <p className="text-xs text-slate-400">“{r.reason}”</p>}
+                </div>
+                {r.status === 'accepted' && (
+                  <div className="flex gap-2">
+                    <Button variant="secondary" size="sm" onClick={() => review.mutate({ requestId: r.id, action: 'reject' })}>
+                      Reject
+                    </Button>
+                    <Button size="sm" onClick={() => review.mutate({ requestId: r.id, action: 'approve' })}>
+                      Approve
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {error && (
+          <div className="rounded-lg border border-red-300/40 bg-red-500/10 px-3 py-2 text-sm text-red-600">
+            {error}
+          </div>
+        )}
+
+        <ModalFooter className="pt-2">
+          <Button variant="secondary" onClick={onClose}>Close</Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
 }

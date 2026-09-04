@@ -15,6 +15,8 @@ export interface OptimizerShift {
   required_count: number;
   position_id?: string;
   department_id?: string;
+  required_skills?: string[];
+  required_certifications?: string[];
 }
 
 export interface OptimizerEmployee {
@@ -22,6 +24,8 @@ export interface OptimizerEmployee {
   available_shift_ids: string[];
   max_hours_per_week?: number;
   min_hours_per_week?: number;
+  skills?: string[];
+  certifications?: string[];
 }
 
 export interface OptimizeRequest {

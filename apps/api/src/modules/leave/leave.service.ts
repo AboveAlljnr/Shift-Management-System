@@ -2,17 +2,22 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import type { CreateLeaveRequestDto, ReviewLeaveDto } from '@sms/shared';
 
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { ScopeFilterService } from '../authorization/scope-filter.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class LeaveService {
+  private readonly logger = new Logger(LeaveService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly scopeFilter: ScopeFilterService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async getLeaveTypes(companyId: string) {
@@ -94,6 +99,10 @@ export class LeaveService {
   ) {
     const request = await this.prisma.leaveRequest.findFirst({
       where: { id: requestId, companyId },
+      include: {
+        employee: { select: { id: true, userId: true, firstName: true, lastName: true } },
+        leaveType: { select: { name: true } },
+      },
     });
 
     if (!request) {
@@ -106,7 +115,7 @@ export class LeaveService {
 
     const newStatus = dto.action === 'approve' ? 'approved' : 'rejected';
 
-    return this.prisma.leaveRequest.update({
+    const updated = await this.prisma.leaveRequest.update({
       where: { id: requestId },
       data: {
         status: newStatus,
@@ -119,6 +128,25 @@ export class LeaveService {
         employee: true,
       },
     });
+
+    if (request.employee.userId) {
+      const approved = newStatus === 'approved';
+      try {
+        await this.notifications.createForUser({
+          companyId,
+          recipientUserId: request.employee.userId,
+          eventType: approved ? 'leave.approved' : 'leave.rejected',
+          title: approved ? 'Leave request approved' : 'Leave request declined',
+          body: `Your ${request.leaveType.name} leave request was ${approved ? 'approved' : 'declined'}`,
+          relatedEntityType: 'leave_request',
+          relatedEntityId: requestId,
+        });
+      } catch (err) {
+        this.logger.warn(`Failed to raise leave notification: ${(err as Error).message}`);
+      }
+    }
+
+    return updated;
   }
 
   async getBalances(

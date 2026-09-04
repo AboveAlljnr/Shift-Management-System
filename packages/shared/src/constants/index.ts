@@ -56,6 +56,30 @@ export const LEAVE_STATUSES = ['pending', 'approved', 'rejected', 'cancelled'] a
 // ---- Notification channels ----
 export const NOTIFICATION_CHANNELS = ['in_app', 'email', 'push'] as const;
 
+// ---- Swap / open-shift statuses ----
+export const SWAP_REQUEST_STATUSES = ['pending', 'accepted', 'rejected', 'cancelled', 'approved'] as const;
+export const OPEN_SHIFT_STATUSES = ['pending', 'approved', 'rejected', 'cancelled'] as const;
+
+// ---- Notification event types (in-app event bus) ----
+export const NOTIFICATION_EVENT_TYPES = [
+  'schedule.published',
+  'shift.assigned',
+  'open_shift.available',
+  'open_shift.requested',
+  'open_shift.approved',
+  'open_shift.rejected',
+  'swap.requested',
+  'swap.accepted',
+  'swap.rejected',
+  'swap.approved',
+  'leave.approved',
+  'leave.rejected',
+  'attendance.exception',
+  'presence_verification.missed',
+  'presence_verification.verified',
+  'presence_verification.outside_geofence',
+] as const;
+
 // ---- Queue names ----
 export const QUEUE_NAMES = {
   NOTIFICATIONS: 'notifications',

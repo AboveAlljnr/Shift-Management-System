@@ -19,6 +19,12 @@ export class NotificationsService {
     });
   }
 
+  async countUnread(userId: string) {
+    return this.prisma.notification.count({
+      where: { recipientId: userId, isRead: false },
+    });
+  }
+
   async markAsRead(notificationId: string, userId: string) {
     const notification = await this.prisma.notification.findFirst({
       where: { id: notificationId, recipientId: userId },

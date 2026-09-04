@@ -1,4 +1,4 @@
-import { PERMISSION_ACTIONS } from '@sms/shared';
+import { PERMISSION_ACTIONS, getRolePermissionTemplate } from '@sms/shared';
 import { describe, it, expect } from 'vitest';
 
 import { REQUIRED_PERMISSION_KEY } from '../../common/decorators/required-permission.decorator';
@@ -96,6 +96,40 @@ describe('Authorization matrix — company & permissions', () => {
 describe('Authorization matrix — audit', () => {
   it('gates audit log reads', () => {
     requireOne(AuditController, 'list', 'audit.read');
+  });
+});
+
+describe('Authorization matrix — SHIFT_MANAGER supervisory role', () => {
+  const TEMPLATE = getRolePermissionTemplate('SHIFT_MANAGER');
+
+  it('every template action resolves to a canonical catalog action', () => {
+    for (const action of TEMPLATE) {
+      expect((PERMISSION_ACTIONS as readonly string[]).includes(action), action).toBe(true);
+    }
+  });
+
+  it('grants operational scheduling permissions', () => {
+    expect(TEMPLATE).toContain('schedule.read');
+    expect(TEMPLATE).toContain('shift.assign');
+    expect(TEMPLATE).toContain('shift.conflict_override');
+    expect(TEMPLATE).toContain('availability.read');
+    expect(TEMPLATE).toContain('attendance.read');
+  });
+
+  it('does not grant managerial or HR-admin powers', () => {
+    expect(TEMPLATE).not.toContain('schedule.create');
+    expect(TEMPLATE).not.toContain('schedule.publish');
+    expect(TEMPLATE).not.toContain('employee.update');
+    expect(TEMPLATE).not.toContain('employee.create');
+    expect(TEMPLATE).not.toContain('employee.deactivate');
+    expect(TEMPLATE).not.toContain('leave.approve');
+    expect(TEMPLATE).not.toContain('company.settings.manage');
+  });
+
+  it('the endpoints the role should reach carry exactly the operational pairs', () => {
+    requireOne(SchedulingController, 'validateAssignment', 'shift.assign');
+    requireOne(SchedulingController, 'assign', 'shift.assign');
+    requireOne(SchedulingController, 'overrideConflict', 'shift.conflict_override');
   });
 });
 

@@ -1,10 +1,13 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Bell, LogOut, ChevronDown } from 'lucide-react';
 
-import { clearAuth, getAuthUser } from '@/lib/auth';
+import { clearAuth, getAuthUser, roleLabel } from '@/lib/auth';
+import { fetchUnreadCount } from '@/lib/api/queries';
 import { getInitials } from '@/lib/utils';
 
 export function Header() {
@@ -12,6 +15,13 @@ export function Header() {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const user = getAuthUser();
+
+  const { data: unread } = useQuery({
+    queryKey: ['notifications-unread'],
+    queryFn: fetchUnreadCount,
+    refetchInterval: 30 * 1000,
+  });
+  const unreadCount = unread?.count ?? 0;
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -44,13 +54,18 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-2">
-        <button
+        <Link
+          href="/notifications"
           className="relative w-9 h-9 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-500 cursor-pointer transition-colors"
-          aria-label="Notifications"
+          aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
         >
           <Bell size={17} />
-          <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-red-500 border-2 border-white" />
-        </button>
+          {unreadCount > 0 && (
+            <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center border-2 border-white">
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </span>
+          )}
+        </Link>
 
         <div className="relative" ref={menuRef}>
           <button
@@ -72,7 +87,9 @@ export function Header() {
                 <p className="truncate text-sm font-semibold text-slate-900">{displayName}</p>
                 {user?.email && <p className="truncate text-xs text-slate-500">{user.email}</p>}
                 {user && user.roles.length > 0 && (
-                  <p className="mt-1 text-xs text-slate-400">{user.roles.join(', ')}</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {user.roles.map(roleLabel).join(', ')}
+                  </p>
                 )}
               </div>
               <button

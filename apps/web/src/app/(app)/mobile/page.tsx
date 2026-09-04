@@ -2,24 +2,46 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import axios, { AxiosError } from 'axios';
-import { MapPin, Clock, AlertTriangle, CheckCircle2, Wifi, WifiOff } from 'lucide-react';
+import { MapPin, Clock, AlertTriangle, CheckCircle2, Wifi, WifiOff, RefreshCw, CalendarClock } from 'lucide-react';
 import { useState } from 'react';
 
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import {
   fetchEmployeeAttendance,
+  fetchEmployees,
   fetchMyEmployee,
   fetchMyGeofenceStatus,
   fetchMyPresenceVerification,
+  fetchMyRequests,
   fetchMyShifts,
+  fetchShifts,
   recordClockEvent,
+  requestOpenShift,
+  requestSwap,
+  respondSwap,
   verifyPresence,
   type MyGeofenceStatus,
   type MyPresenceVerification,
 } from '@/lib/api/queries';
 import { cn, formatTime } from '@/lib/utils';
 import { format } from 'date-fns';
+
+const OPEN_REQUEST_STATUS_LABELS: Record<string, string> = {
+  pending: 'Requested — awaiting approval',
+  approved: 'Approved',
+  rejected: 'Declined',
+  cancelled: 'Cancelled',
+};
+
+const SWAP_STATUS_LABELS: Record<string, string> = {
+  pending: 'Pending',
+  accepted: 'Accepted — awaiting manager approval',
+  approved: 'Approved',
+  rejected: 'Declined',
+  cancelled: 'Cancelled',
+};
 
 function getCurrentPosition(): Promise<GeolocationPosition> {
   return new Promise((resolve, reject) => {
@@ -93,6 +115,31 @@ export default function MobilePage() {
     staleTime: 60 * 1000,
   });
 
+  const { data: openShifts = [] } = useQuery({
+    queryKey: ['shifts', 'open'],
+    queryFn: () => fetchShifts({ isOpen: true }),
+    staleTime: 60 * 1000,
+  });
+
+  const { data: myRequests, refetch: refetchMyRequests } = useQuery({
+    queryKey: ['myRequests', myEmployeeId],
+    queryFn: fetchMyRequests,
+    enabled: !!myEmployeeId,
+    refetchInterval: 30 * 1000,
+  });
+
+  const { data: colleagueOptions } = useQuery({
+    queryKey: ['employees', 'colleagues'],
+    queryFn: () => fetchEmployees({ limit: 100 }),
+    staleTime: 60 * 1000,
+  });
+
+  const [openNotice, setOpenNotice] = useState<string | null>(null);
+  const [swapShiftId, setSwapShiftId] = useState('');
+  const [swapTarget, setSwapTarget] = useState('');
+  const [swapReason, setSwapReason] = useState('');
+  const [swapNotice, setSwapNotice] = useState<string | null>(null);
+
   const { data: geofenceStatus } = useQuery({
     queryKey: ['attendance', 'me', 'geofence'],
     queryFn: fetchMyGeofenceStatus,
@@ -163,6 +210,45 @@ export default function MobilePage() {
     },
     onError: (e) => setClockNotice(extractClockError(e)),
     onSettled: () => setLocating(false),
+  });
+
+  const requestOpenShiftMutation = useMutation({
+    mutationFn: (shiftId: string) => requestOpenShift(shiftId),
+    onSuccess: () => {
+      setOpenNotice('Open shift requested. A supervisor will review it.');
+      queryClient.invalidateQueries({ queryKey: ['myRequests', myEmployeeId] });
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    },
+    onError: (e) => setOpenNotice(extractClockError(e)),
+  });
+
+  const requestSwapMutation = useMutation({
+    mutationFn: () =>
+      requestSwap(swapShiftId, {
+        targetEmployeeId: swapTarget || undefined,
+        reason: swapReason || undefined,
+      }),
+    onSuccess: () => {
+      setSwapNotice('Swap request submitted.');
+      setSwapShiftId('');
+      setSwapTarget('');
+      setSwapReason('');
+      refetchMyRequests();
+      queryClient.invalidateQueries({ queryKey: ['myRequests', myEmployeeId] });
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    },
+    onError: (e) => setSwapNotice(extractClockError(e)),
+  });
+
+  const respondSwapMutation = useMutation({
+    mutationFn: ({ requestId, action }: { requestId: string; action: 'accept' | 'reject' }) =>
+      respondSwap(requestId, action),
+    onSuccess: () => {
+      setSwapNotice('Swap response submitted.');
+      queryClient.invalidateQueries({ queryKey: ['myRequests', myEmployeeId] });
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    },
+    onError: (e) => setSwapNotice(extractClockError(e)),
   });
 
   const handleClock = async () => {
@@ -441,6 +527,164 @@ export default function MobilePage() {
             </div>
           )}
         </div>
+
+        {/* Open shifts */}
+        <Card className="border border-slate-200/80">
+          <CardContent className="p-4">
+            <div className="mb-2 flex items-center gap-2">
+              <CalendarClock size={15} className="text-brand" />
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                Open Shifts
+              </p>
+            </div>
+            {openShifts.length === 0 ? (
+              <p className="text-xs text-slate-400">No open shifts available right now.</p>
+            ) : (
+              <div className="space-y-2">
+                {openShifts.map((shift) => {
+                  const mine = myRequests?.openShiftRequests?.find(
+                    (r) => r.shiftId === shift.id && (r.status === 'pending' || r.status === 'approved'),
+                  );
+                  return (
+                    <div key={shift.id} className="flex items-center justify-between gap-2 rounded-xl border border-slate-200/80 px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-800">{shift.name}</p>
+                        <p className="text-xs text-slate-500">
+                          {formatTime(shift.startAt)} – {formatTime(shift.endAt)}
+                        </p>
+                        {mine ? (
+                          <p className="text-xs font-medium text-brand">{OPEN_REQUEST_STATUS_LABELS[mine.status] ?? mine.status}</p>
+                        ) : null}
+                      </div>
+                      {mine ? (
+                        <Badge variant={mine.status === 'approved' ? 'success' : mine.status === 'pending' ? 'info' : 'neutral'}>
+                          {mine.status}
+                        </Badge>
+                      ) : (
+                        <Button size="sm" onClick={() => requestOpenShiftMutation.mutate(shift.id)} disabled={requestOpenShiftMutation.isPending}>
+                          Request
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {openNotice && (
+              <p className="mt-2 flex items-center gap-1 text-xs text-red-600">
+                <AlertTriangle size={13} />
+                {openNotice}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Swaps */}
+        <Card className="border border-slate-200/80">
+          <CardContent className="p-4">
+            <div className="mb-2 flex items-center gap-2">
+              <RefreshCw size={15} className="text-brand" />
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                Shift Swaps
+              </p>
+            </div>
+
+            {myEmployeeId && (
+              <div className="space-y-2">
+                <select
+                  value={swapShiftId}
+                  onChange={(e) => setSwapShiftId(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900"
+                >
+                  <option value="">Pick your assigned shift…</option>
+                  {(myShifts ?? [])
+                    .filter((s) => s.endAt.slice(0, 10) >= todayISO)
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} · {formatTime(s.startAt)}
+                      </option>
+                    ))}
+                </select>
+                {colleagueOptions && colleagueOptions.data.length > 1 && (
+                  <select
+                    value={swapTarget}
+                    onChange={(e) => setSwapTarget(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900"
+                  >
+                    <option value="">Any colleague (open offer)</option>
+                    {colleagueOptions.data
+                      .filter((e) => e.id !== myEmployeeId)
+                      .map((e) => (
+                        <option key={e.id} value={e.id}>
+                          {e.firstName} {e.lastName}
+                        </option>
+                      ))}
+                  </select>
+                )}
+                <input
+                  value={swapReason}
+                  onChange={(e) => setSwapReason(e.target.value)}
+                  placeholder="Reason (optional)"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900 placeholder:text-slate-400"
+                />
+                <Button
+                  size="sm"
+                  className="w-full"
+                  onClick={() => requestSwapMutation.mutate()}
+                  disabled={!swapShiftId || requestSwapMutation.isPending}
+                >
+                  Request swap
+                </Button>
+              </div>
+            )}
+
+            {myRequests && (
+              <div className="mt-3 space-y-2">
+                {(myRequests.swapRequests ?? [])
+                  .filter((r) => r.requestingEmployeeId === myEmployeeId)
+                  .map((r) => (
+                    <div key={r.id} className="rounded-xl border border-slate-200/80 px-3 py-2">
+                      <p className="text-sm font-semibold text-slate-800">{r.shift.name}</p>
+                      <p className="text-xs text-slate-500">
+                        Swap with {r.targetEmployee ? `${r.targetEmployee.firstName} ${r.targetEmployee.lastName}` : 'any colleague'} · {SWAP_STATUS_LABELS[r.status] ?? r.status}
+                      </p>
+                    </div>
+                  ))}
+
+                {myRequests.swapRequests
+                  .filter((r) => r.status === 'pending' && r.requestingEmployeeId !== myEmployeeId)
+                  .map((r) => (
+                    <div key={r.id} className="rounded-xl border border-brand/30 bg-brand/5 px-3 py-2">
+                      <p className="text-sm font-semibold text-slate-800">{r.shift.name}</p>
+                      <p className="text-xs text-slate-500">
+                        {r.requestingEmployee.firstName} {r.requestingEmployee.lastName} wants to swap with you
+                      </p>
+                      {r.reason && <p className="text-xs text-slate-400">“{r.reason}”</p>}
+                      <div className="mt-2 flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => respondSwapMutation.mutate({ requestId: r.id, action: 'reject' })}
+                        >
+                          Decline
+                        </Button>
+                        <Button size="sm" onClick={() => respondSwapMutation.mutate({ requestId: r.id, action: 'accept' })}>
+                          Accept
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
+
+            {swapNotice && (
+              <p className="mt-2 flex items-center gap-1 text-xs text-red-600">
+                <AlertTriangle size={13} />
+                {swapNotice}
+              </p>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Debug info (dev only) */}
         {position && process.env.NODE_ENV === 'development' && (

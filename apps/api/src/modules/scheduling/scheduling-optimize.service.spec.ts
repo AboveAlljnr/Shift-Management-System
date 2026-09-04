@@ -62,7 +62,10 @@ function createOptimizeDeps() {
   };
 
   const optimizer = { optimize: vi.fn() };
-  return { prisma, shift, employee, shiftAssignment, leaveRequest, optimizationRequest, optimizer };
+  const notifications = {
+    createForUser: vi.fn().mockResolvedValue({}),
+  };
+  return { prisma, shift, employee, shiftAssignment, leaveRequest, optimizationRequest, optimizer, notifications };
 }
 
 const baseShift = {
@@ -99,6 +102,7 @@ function buildService(deps: ReturnType<typeof createOptimizeDeps>) {
     deps.prisma as any,
     companyWideScopeFilter(),
     deps.optimizer as any,
+    deps.notifications as any,
   );
   return service;
 }
@@ -257,6 +261,9 @@ describe('SchedulingService — applySuggestions', () => {
   beforeEach(() => {
     deps = createOptimizeDeps();
     service = buildService(deps);
+    // Notifications helper queries these two; keep them inert in apply tests.
+    deps.employee.findMany.mockResolvedValue([]);
+    deps.shift.findMany.mockResolvedValue([]);
   });
 
   it('applies clean pairs and skips already-assigned', async () => {
@@ -345,5 +352,117 @@ describe('SchedulingService — applySuggestions', () => {
     const callData = deps.optimizationRequest.create.mock.calls[0][0].data;
     expect(callData.status).toBe('completed');
     expect(callData.requestedById).toBe('user1');
+  });
+});
+
+describe('SchedulingService — qualification-aware optimization + explainability', () => {
+  it('prunes unqualified employees from offered shifts, passes quals to the optimizer, and reports exclusion reasons', async () => {
+    const deps = createOptimizeDeps();
+    const service = buildService(deps);
+
+    const shiftWithQual = {
+      ...baseShift,
+      requirements: [
+        { id: 'r1', headcount: 1, skills: [{ skillId: 'sk1' }], certifications: [] },
+      ],
+    };
+    deps.shift.findMany.mockResolvedValue([shiftWithQual]);
+    deps.employee.findMany.mockResolvedValue([
+      { ...activeEmployee, skills: [{ skillId: 'sk1', skill: { isActive: true } }], certifications: [] },
+      { ...activeEmployee2, skills: [], certifications: [] },
+    ]);
+    deps.leaveRequest.findMany.mockResolvedValue([]);
+    deps.shiftAssignment.findMany.mockResolvedValue([]);
+    deps.optimizationRequest.create.mockResolvedValue({});
+
+    let capturedRequest: any = null;
+    deps.optimizer.optimize.mockImplementation(async (req: any) => {
+      capturedRequest = req;
+      return {
+        status: 'optimal',
+        assignments: [{ shift_id: 's1', employee_id: 'e1' }],
+        solver_time_seconds: 0.2,
+        unmet_shifts: [],
+      };
+    });
+
+    vi.spyOn(service, 'validateAssignment').mockResolvedValue({
+      isValid: true,
+      conflicts: [],
+      warnings: [],
+    });
+
+    const result = await service.generateSuggestions(
+      'c1',
+      { branchId: 'b1', startDate: '2026-09-05T00:00:00.000Z', endDate: '2026-09-11T23:59:59.000Z' },
+      'user1',
+      'm1',
+    );
+
+    // Qualification gate: unqualified employee e2 is never offered the shift.
+    const e1 = capturedRequest.employees.find((e: any) => e.employee_id === 'e1');
+    const e2 = capturedRequest.employees.find((e: any) => e.employee_id === 'e2');
+    expect(e1.available_shift_ids).toEqual(['s1']);
+    expect(e2.available_shift_ids).toEqual([]);
+    expect(e1.skills).toEqual(['sk1']);
+    expect(capturedRequest.shifts[0].required_skills).toEqual(['sk1']);
+
+    // Explanation is derived from real filtering.
+    expect(result.explanation?.employeesConsidered).toBe(2);
+    expect(result.explanation?.fullyCoveredShifts).toBe(1);
+    expect(result.explanation?.partiallyCoveredShifts).toBe(0);
+    expect(result.explanation?.unfilledShifts).toBe(0);
+    expect(result.explanation?.exclusionReasons).toContainEqual({ code: 'MISSING_SKILL', count: 1 });
+    expect(result.assignments).toHaveLength(1);
+    expect(result.assignments[0].employeeId).toBe('e1');
+  });
+
+  it('reports an expired certification when the employee holds it but it lapsed', async () => {
+    const deps = createOptimizeDeps();
+    const service = buildService(deps);
+
+    const shiftWithCert = {
+      ...baseShift,
+      requirements: [
+        { id: 'r1', headcount: 1, skills: [], certifications: [{ certificationId: 'cr1' }] },
+      ],
+    };
+    deps.shift.findMany.mockResolvedValue([shiftWithCert]);
+    deps.employee.findMany.mockResolvedValue([
+      {
+        ...activeEmployee,
+        skills: [],
+        certifications: [
+          { id: 'ec', certificationId: 'cr1', certification: { isActive: true }, expiresAt: new Date('2020-01-01T00:00:00.000Z') },
+        ],
+      },
+    ]);
+    deps.leaveRequest.findMany.mockResolvedValue([]);
+    deps.shiftAssignment.findMany.mockResolvedValue([]);
+    deps.optimizationRequest.create.mockResolvedValue({});
+
+    let capturedRequest: any = null;
+    deps.optimizer.optimize.mockImplementation(async (req: any) => {
+      capturedRequest = req;
+      return { status: 'optimal', assignments: [], solver_time_seconds: 0.1, unmet_shifts: ['s1'] };
+    });
+
+    vi.spyOn(service, 'validateAssignment').mockResolvedValue({
+      isValid: true,
+      conflicts: [],
+      warnings: [],
+    });
+
+    const result = await service.generateSuggestions(
+      'c1',
+      { branchId: 'b1', startDate: '2026-09-05T00:00:00.000Z', endDate: '2026-09-11T23:59:59.000Z' },
+      'user1',
+      'm1',
+    );
+
+    expect(capturedRequest.employees[0].available_shift_ids).toEqual([]);
+    expect(capturedRequest.employees[0].certifications).toEqual([]);
+    expect(result.explanation?.exclusionReasons).toContainEqual({ code: 'EXPIRED_CERTIFICATION', count: 1 });
+    expect(result.explanation?.unfilledShifts).toBe(1);
   });
 });
