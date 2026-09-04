@@ -1,6 +1,50 @@
 import { PrismaClient } from '@prisma/client';
 
-import { ROLE_PERMISSION_TEMPLATES } from '@sms/shared';
+import {
+  getRolePermissionTemplate,
+  ROLE_PERMISSION_TEMPLATES,
+} from '@sms/shared';
+import * as bcrypt from 'bcrypt';
+
+const SALT_ROUNDS = 12;
+
+interface DemoAccount {
+  email: string;
+  password: string;
+  name: string;
+  roleCode: string;
+  employeeNumber: string;
+}
+
+const DEMO_COMPANY = {
+  name: 'Demo Company',
+  slug: 'demo',
+  timezone: 'UTC',
+};
+
+const DEMO_ACCOUNTS: DemoAccount[] = [
+  {
+    email: 'owner@demo.com',
+    password: 'DemoPass-123!',
+    name: 'Demo Owner',
+    roleCode: 'OWNER',
+    employeeNumber: 'DEMO-001',
+  },
+  {
+    email: 'manager@demo.com',
+    password: 'DemoPass-123!',
+    name: 'Demo Manager',
+    roleCode: 'MANAGER',
+    employeeNumber: 'DEMO-002',
+  },
+  {
+    email: 'employee@demo.com',
+    password: 'DemoPass-123!',
+    name: 'Demo Employee',
+    roleCode: 'EMPLOYEE',
+    employeeNumber: 'DEMO-003',
+  },
+];
 
 const prisma = new PrismaClient();
 
@@ -102,6 +146,146 @@ async function main() {
   console.log(
     `Linked ${linked} Owner role-permission grants across ${ownerRoles.length} Owner role(s); catalog covers ${catalog.length} of ${canonicalOwnerActions.length} canonical Owner actions.`,
   );
+
+  await seedDemoCompany();
+}
+
+/**
+ * Creates a demo company with stable Owner, Manager, and Employee accounts so
+ * the app can be explored without registering a new company. Idempotent: skips
+ * any record that already exists and logs what was created.
+ */
+async function seedDemoCompany(): Promise<void> {
+  const created: string[] = [];
+
+  const company = await prisma.company.upsert({
+    where: { slug: DEMO_COMPANY.slug },
+    update: {},
+    create: {
+      name: DEMO_COMPANY.name,
+      slug: DEMO_COMPANY.slug,
+      timezone: DEMO_COMPANY.timezone,
+    },
+  });
+
+  created.push(`company:${company.slug}`);
+
+  const defaultBranch = await prisma.branch.upsert({
+    where: { companyId_code: { companyId: company.id, code: 'MAIN' } },
+    update: {},
+    create: {
+      companyId: company.id,
+      name: 'Main Branch',
+      code: 'MAIN',
+      timezone: DEMO_COMPANY.timezone,
+    },
+  });
+
+  const fullTimeType = await prisma.employmentType.upsert({
+    where: { companyId_code: { companyId: company.id, code: 'FT' } },
+    update: {},
+    create: {
+      companyId: company.id,
+      name: 'Full Time',
+      code: 'FT',
+    },
+  });
+
+  for (const account of DEMO_ACCOUNTS) {
+    const user = await prisma.user.upsert({
+      where: { email: account.email },
+      update: {},
+      create: {
+        email: account.email,
+        passwordHash: await bcrypt.hash(account.password, SALT_ROUNDS),
+        name: account.name,
+        status: 'active',
+        emailVerifiedAt: new Date(),
+      },
+    });
+
+    const membership = await prisma.companyMembership.upsert({
+      where: { userId_companyId: { userId: user.id, companyId: company.id } },
+      update: {},
+      create: {
+        userId: user.id,
+        companyId: company.id,
+        status: 'active',
+        joinedAt: new Date(),
+      },
+    });
+
+    const role =
+      (await prisma.role.findFirst({
+        where: { companyId: company.id, code: account.roleCode },
+      })) ??
+      (await prisma.role.create({
+        data: {
+          companyId: company.id,
+          name:
+            account.roleCode.charAt(0) + account.roleCode.slice(1).toLowerCase(),
+          code: account.roleCode,
+          isSystemRole: true,
+        },
+      }));
+
+    const actions = getRolePermissionTemplate(account.roleCode);
+    if (actions.length > 0) {
+      const perms = await prisma.permission.findMany({
+        where: { action: { in: [...actions] } },
+        select: { id: true },
+      });
+      if (perms.length > 0) {
+        await prisma.rolePermission.createMany({
+          data: perms.map((p) => ({ roleId: role.id, permissionId: p.id })),
+          skipDuplicates: true,
+        });
+      }
+    }
+
+    await prisma.userRole.upsert({
+      where: { membershipId_roleId: { membershipId: membership.id, roleId: role.id } },
+      update: {},
+      create: { membershipId: membership.id, roleId: role.id },
+    });
+
+    if (!(await prisma.accessScope.findFirst({ where: { membershipId: membership.id } }))) {
+      await prisma.accessScope.create({
+        data: {
+          membershipId: membership.id,
+          scopeType: 'company',
+          scopeId: company.id,
+        },
+      });
+    }
+
+    const employeeExists = await prisma.employee.findFirst({
+      where: { companyId: company.id, userId: user.id },
+    });
+    if (!employeeExists) {
+      await prisma.employee.create({
+        data: {
+          companyId: company.id,
+          userId: user.id,
+          employeeNumber: account.employeeNumber,
+          firstName: account.name.split(' ')[0] || account.name,
+          lastName:
+            account.name.split(' ').slice(1).join(' ') || account.roleCode,
+          email: account.email,
+          employmentTypeId: fullTimeType.id,
+          branchId: defaultBranch.id,
+          hireDate: new Date(),
+          status: 'active',
+        },
+      });
+      created.push(`user:${account.email}`);
+    }
+  }
+
+  console.log(`Demo company '${DEMO_COMPANY.slug}' ready. Accounts: ${DEMO_ACCOUNTS.map((a) => `${a.email} / ${a.password}`).join(', ')}`);
+  if (created.length > 0) {
+    console.log(`Created (new): ${created.join(', ')}`);
+  }
 }
 
 main()
