@@ -1,12 +1,15 @@
 ﻿'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import axios, { AxiosError } from 'axios';
 import Link from 'next/link';
 import type { Route } from 'next';
 import { useMemo, useState } from 'react';
+import { MapPin, Calendar, Clock, Plane } from 'lucide-react';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { PageHeader } from '@/components/ui/page-header';
 import {
   fetchCompany,
   fetchDailyAttendance,
@@ -15,6 +18,7 @@ import {
   fetchLeaveBalances,
   fetchLeaveRequests,
   fetchMyEmployee,
+  fetchMyGeofenceStatus,
   fetchMyShifts,
   fetchShifts,
   recordClockEvent,
@@ -32,13 +36,13 @@ const weekEndISO = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000).toISOStri
 function statClass(tone: string) {
   switch (tone) {
     case 'success':
-      return 'bg-emerald-100 text-emerald-800';
+      return 'bg-emerald-500';
     case 'warning':
-      return 'bg-amber-100 text-amber-800';
+      return 'bg-amber-500';
     case 'danger':
-      return 'bg-rose-100 text-rose-800';
+      return 'bg-rose-500';
     default:
-      return 'bg-muted text-muted-foreground';
+      return 'bg-slate-300';
   }
 }
 
@@ -54,14 +58,14 @@ function StatCard({
   href?: Route;
 }) {
   const body = (
-    <Card className="hover:border-ring/40 transition-colors">
-      <CardContent className="p-5">
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">{label}</p>
-          <span className={cn('inline-flex h-2 w-2 rounded-full', tone ? statClass(tone) : 'bg-muted')} />
+    <Card className="p-5 hover:border-slate-300 transition-colors">
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">{label}</p>
+          <p className="text-3xl font-bold text-slate-900 font-sans">{value}</p>
         </div>
-        <p className="mt-2 text-3xl font-bold tracking-tight">{value}</p>
-      </CardContent>
+        <span className={cn('inline-block h-2.5 w-2.5 rounded-full mt-1', tone ? statClass(tone) : 'bg-slate-200')} />
+      </div>
     </Card>
   );
 
@@ -90,10 +94,10 @@ export default function DashboardPage() {
   if (companyLoading || !company) {
     return (
       <div className="space-y-6">
-        <div className="h-28 animate-pulse rounded-lg bg-muted" />
+        <div className="h-28 animate-pulse rounded-xl bg-slate-200/60" />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="h-24 animate-pulse rounded-lg bg-muted" />
+            <div key={i} className="h-24 animate-pulse rounded-xl bg-slate-200/60" />
           ))}
         </div>
       </div>
@@ -102,12 +106,10 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">{company.name}</h1>
-        <p className="text-sm text-muted-foreground">
-          {isManager ? 'Manager workspace' : 'Team member workspace'} · {format(today, 'EEEE, MMMM d')}
-        </p>
-      </div>
+      <PageHeader
+        title={company.name}
+        subtitle={`${isManager ? 'Manager workspace' : 'Team member workspace'} · ${format(today, 'EEEE, MMMM d')}`}
+      />
 
       {isManager ? <ManagerDashboard /> : <EmployeeDashboard />}
     </div>
@@ -148,15 +150,60 @@ function EmployeeDashboard() {
     enabled: !!myEmployeeId,
   });
 
+  const { data: geofenceStatus } = useQuery({
+    queryKey: ['attendance', 'me', 'geofence'],
+    queryFn: fetchMyGeofenceStatus,
+    staleTime: 60 * 1000,
+  });
+
+  const [locating, setLocating] = useState(false);
+
   const clockMutation = useMutation({
-    mutationFn: (eventType: 'clock_in' | 'clock_out') =>
-      recordClockEvent({ eventType, clientOccurredAt: new Date().toISOString(), idempotencyKey: crypto.randomUUID() }),
+    mutationFn: (args: {
+      eventType: 'clock_in' | 'clock_out';
+      latitude?: number;
+      longitude?: number;
+    }) =>
+      recordClockEvent({
+        eventType: args.eventType,
+        clientOccurredAt: new Date().toISOString(),
+        idempotencyKey: crypto.randomUUID(),
+        latitude: args.latitude,
+        longitude: args.longitude,
+      }),
     onSuccess: () => {
       setClockNotice('Time recorded');
       queryClient.invalidateQueries({ queryKey: ['attendance', 'me'] });
     },
-    onError: () => setClockNotice('Unable to record time. Try again.'),
+    onError: (e) => setClockNotice(extractClockError(e)),
+    onSettled: () => setLocating(false),
   });
+
+  const handleClock = async () => {
+    setClockNotice(null);
+    if (isClockedIn) {
+      clockMutation.mutate({ eventType: 'clock_out' });
+      return;
+    }
+
+    if (geofenceStatus?.applicable) {
+      setLocating(true);
+      try {
+        const pos = await getCurrentPosition();
+        clockMutation.mutate({
+          eventType: 'clock_in',
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+        });
+      } catch (locErr) {
+        setLocating(false);
+        setClockNotice(getLocationErrorMessage(locErr));
+      }
+      return;
+    }
+
+    clockMutation.mutate({ eventType: 'clock_in' });
+  };
 
   const todaysShift = myShifts?.find((s) => s.startAt.slice(0, 10) === todayISO);
   const upcoming = (myShifts ?? []).filter((s) => s.startAt.slice(0, 10) >= todayISO).slice(0, 3);
@@ -167,64 +214,78 @@ function EmployeeDashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Greeting + clock */}
+      {/* Greeting + clock card */}
       <Card>
         <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-lg font-semibold">Hello{me ? `, ${me.firstName}` : ''}</p>
-            <p className="text-sm text-muted-foreground">
-              Your workday at a glance
+            <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider">
+              {format(today, 'EEEE, MMMM d').toUpperCase()}
+            </p>
+            <p className="text-2xl font-bold text-slate-900 mt-0.5 font-sans">
+              Hello{me ? `, ${me.firstName}` : ''} 👋
+            </p>
+            <p className="text-sm text-slate-500 mt-1">
+              {geofenceStatus?.applicable
+                ? `Location verified clock-in · ${geofenceStatus.branchName} (within ${Math.round(geofenceStatus.radiusMeters ?? 0)}m)`
+                : 'Your workday at a glance'}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-col items-stretch gap-3 sm:items-end">
             <button
-              onClick={() => clockMutation.mutate(isClockedIn ? 'clock_out' : 'clock_in')}
-              disabled={clockMutation.isPending}
+              onClick={handleClock}
+              disabled={clockMutation.isPending || locating}
               className={cn(
-                'rounded-md px-4 py-2 text-sm font-semibold shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60',
+                'px-6 py-3 text-sm font-bold rounded-xl text-white transition-colors shadow-lg focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60 active:scale-95',
                 isClockedIn
-                  ? 'bg-rose-600 text-white hover:bg-rose-700'
-                  : 'bg-primary text-primary-foreground hover:bg-primary/90',
+                  ? 'bg-red-600 hover:bg-red-700 shadow-red-200'
+                  : 'bg-brand hover:bg-brand-dark shadow-brand/30',
               )}
             >
-              {clockMutation.isPending
-                ? 'Recording…'
-                : isClockedIn
-                  ? 'Clock out'
-                  : 'Clock in'}
+              {locating
+                ? 'Checking your location…'
+                : clockMutation.isPending
+                  ? 'Recording…'
+                  : isClockedIn
+                    ? 'CLOCK OUT'
+                    : 'CLOCK IN'}
             </button>
-            {clockNotice && <p className="text-sm text-muted-foreground">{clockNotice}</p>}
+            {clockNotice && <p className="text-sm text-slate-500 text-right">{clockNotice}</p>}
           </div>
         </CardContent>
       </Card>
 
       {/* Today's shift */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Today&apos;s shift</CardTitle>
-          <CardDescription>
-            {todaysShift ? 'Your assignment for today' : 'No shift assigned today'}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <div className="bg-sidebar text-white rounded-2xl p-5">
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">TODAY</span>
           {todaysShift ? (
-            <div className="flex flex-wrap items-center gap-4">
-              <div>
-                <p className="font-medium">{todaysShift.name}</p>
-                <p className="text-sm text-muted-foreground">
-                  {formatTime(todaysShift.startAt)} – {formatTime(todaysShift.endAt)}
-                  {todaysShift.branch ? ` · ${todaysShift.branch.name}` : ''}
-                </p>
-              </div>
+            <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 text-[10px] font-bold rounded-full uppercase">
+              Active
+            </span>
+          ) : null}
+        </div>
+        <p className="text-lg font-bold text-white mb-1 font-sans">
+          {todaysShift ? todaysShift.name : 'No shift assigned today'}
+        </p>
+        {todaysShift ? (
+          <>
+            <p className="text-slate-300 text-sm font-semibold">
+              {formatTime(todaysShift.startAt)} – {formatTime(todaysShift.endAt)}
+            </p>
+            <div className="flex items-center gap-1.5 mt-2 text-slate-400 text-xs">
+              <MapPin size={11} />
+              {todaysShift.branch ? todaysShift.branch.name : 'Assigned branch'}
+            </div>
+            <div className="mt-3">
               <StatusBadge status={todaysShift.status} />
             </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              Enjoy your day off. You can request leave or check upcoming shifts below.
-            </p>
-          )}
-        </CardContent>
-      </Card>
+          </>
+        ) : (
+          <p className="text-slate-300 text-sm">
+            Enjoy your day off. You can request leave or check upcoming shifts below.
+          </p>
+        )}
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
@@ -252,7 +313,7 @@ function EmployeeDashboard() {
       {/* Upcoming shifts */}
       <Card>
         <CardHeader>
-          <CardTitle>Upcoming shifts</CardTitle>
+          <CardTitle className="text-base font-bold text-slate-900 font-sans">Upcoming shifts</CardTitle>
           <CardDescription>Next 7 days</CardDescription>
         </CardHeader>
         <CardContent>
@@ -261,12 +322,12 @@ function EmployeeDashboard() {
           ) : upcoming.length === 0 ? (
             <p className="text-sm text-muted-foreground">No upcoming shifts.</p>
           ) : (
-            <ul className="divide-y divide-border">
+            <ul className="space-y-3">
               {upcoming.map((shift: ShiftDetail) => (
-                <li key={shift.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
+                <li key={shift.id} className="bg-white rounded-xl border border-slate-200 p-4 flex flex-wrap items-center justify-between gap-2 shift-card">
                   <div>
-                    <p className="text-sm font-medium">{shift.name}</p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-sm font-bold text-slate-800">{shift.name}</p>
+                    <p className="text-xs text-slate-400">
                       {format(parseISO(shift.startAt), 'EEE, MMM d')} · {formatTime(shift.startAt)} –{' '}
                       {formatTime(shift.endAt)}
                     </p>
@@ -281,17 +342,20 @@ function EmployeeDashboard() {
 
       {/* Quick links */}
       <div className="grid gap-3 sm:grid-cols-3">
-        <Link href="/schedule" className="rounded-lg border border-border p-4 hover:bg-muted/50 transition-colors">
-          <p className="font-medium">My Schedule</p>
-          <p className="text-sm text-muted-foreground">View your shifts</p>
+        <Link href="/schedule" className="rounded-xl border border-slate-200 p-4 hover:bg-slate-50 transition-colors">
+          <Calendar size={18} className="text-brand mb-2" />
+          <p className="text-sm font-bold text-slate-800">My Schedule</p>
+          <p className="text-xs text-slate-400">View your shifts</p>
         </Link>
-        <Link href="/leave" className="rounded-lg border border-border p-4 hover:bg-muted/50 transition-colors">
-          <p className="font-medium">Request Leave</p>
-          <p className="text-sm text-muted-foreground">Plan time off</p>
+        <Link href="/leave" className="rounded-xl border border-slate-200 p-4 hover:bg-slate-50 transition-colors">
+          <Plane size={18} className="text-brand mb-2" />
+          <p className="text-sm font-bold text-slate-800">Request Leave</p>
+          <p className="text-xs text-slate-400">Plan time off</p>
         </Link>
-        <Link href="/attendance" className="rounded-lg border border-border p-4 hover:bg-muted/50 transition-colors">
-          <p className="font-medium">Attendance</p>
-          <p className="text-sm text-muted-foreground">Review your time</p>
+        <Link href="/attendance" className="rounded-xl border border-slate-200 p-4 hover:bg-slate-50 transition-colors">
+          <Clock size={18} className="text-brand mb-2" />
+          <p className="text-sm font-bold text-slate-800">Attendance</p>
+          <p className="text-xs text-slate-400">Review your time</p>
         </Link>
       </div>
     </div>
@@ -510,4 +574,50 @@ function formatMinutes(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return `${h}h ${m}m`;
+}
+
+function getCurrentPosition(): Promise<GeolocationPosition> {
+  return new Promise((resolve, reject) => {
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
+      reject(new Error('Geolocation is not supported by this browser.'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0,
+    });
+  });
+}
+
+function getLocationErrorMessage(error: unknown): string {
+  if (error instanceof GeolocationPositionError) {
+    switch (error.code) {
+      case error.PERMISSION_DENIED:
+        return 'Location access was denied. Allow location to clock in at this branch.';
+      case error.POSITION_UNAVAILABLE:
+        return 'Your location could not be determined right now.';
+      case error.TIMEOUT:
+        return 'Location request timed out. Try again.';
+      default:
+        return 'Unable to determine your location.';
+    }
+  }
+  return error instanceof Error ? error.message : 'Unable to determine your location.';
+}
+
+interface ClockErrorBody {
+  message?: string;
+  errors?: Array<{ code?: string; message?: string }>;
+}
+
+function extractClockError(error: unknown): string {
+  const ax = error as AxiosError<ClockErrorBody>;
+  const data = ax?.response?.data;
+  const first = data?.errors?.[0];
+  if (first?.code === 'GEOFENCE_OUTSIDE') {
+    return first.message ?? data?.message ?? 'You are outside the allowed clock-in area.';
+  }
+  if (axios.isAxiosError(error) && data?.message) return data.message;
+  return 'Unable to record time. Try again.';
 }

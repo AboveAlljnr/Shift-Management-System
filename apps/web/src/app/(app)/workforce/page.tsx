@@ -6,6 +6,18 @@ import { useMemo, useState, type FormEvent } from 'react';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/ui/page-header';
+import { Avatar } from '@/components/ui/avatar';
+import {
+  Modal,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
+  ModalTitle,
+  ModalDescription,
+  ModalClose,
+} from '@/components/ui/modal';
 import {
   createEmployee,
   deactivateEmployee,
@@ -113,18 +125,13 @@ export default function WorkforcePage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Workforce</h1>
-          <p className="text-sm text-muted-foreground">
-            {total} people · {activeCount} active
-          </p>
-        </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
-        >
+        <PageHeader
+          title="Workforce"
+          subtitle={`${total} people · ${activeCount} active`}
+        />
+        <Button onClick={() => setShowCreate(true)}>
           Add employee
-        </button>
+        </Button>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -132,7 +139,7 @@ export default function WorkforcePage() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search by name, email, or employee number…"
-          className="w-full max-w-sm rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          className="w-full max-w-sm px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand transition"
         />
       </div>
 
@@ -145,32 +152,30 @@ export default function WorkforcePage() {
       ) : list.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
-            <Users className="h-8 w-8 text-muted-foreground" />
+            <Users className="h-8 w-8 text-slate-400" />
             <p className="font-medium">No employees yet</p>
-            <p className="text-sm text-muted-foreground">Add your first employee to get started.</p>
+            <p className="text-sm text-slate-500">Add your first employee to get started.</p>
           </CardContent>
         </Card>
       ) : (
         <Card>
           <CardContent className="p-0">
-            <ul className="divide-y divide-border">
+            <ul className="divide-y divide-slate-100">
               {list.map((emp) => (
                 <li key={emp.id} className="flex flex-wrap items-center justify-between gap-3 px-6 py-4">
                   <div className="flex items-center gap-3">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary">
-                      {getInitials(`${emp.firstName} ${emp.lastName}`)}
-                    </span>
+                    <Avatar initials={getInitials(`${emp.firstName} ${emp.lastName}`)} size="md" />
                     <div>
-                      <p className="text-sm font-medium">
+                      <p className="text-sm font-semibold text-slate-800">
                         {emp.firstName} {emp.lastName}
                       </p>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-xs text-slate-400">
                         {emp.email} · {emp.employeeNumber}
                       </p>
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-3">
-                    <span className="hidden text-sm text-muted-foreground md:inline">
+                    <span className="hidden text-sm text-slate-500 md:inline">
                       {[emp.branch?.name, emp.department?.name].filter(Boolean).join(' · ') || 'Unassigned'}
                     </span>
                     <StatusBadge status={emp.status} />
@@ -178,7 +183,7 @@ export default function WorkforcePage() {
                       <button
                         onClick={() => deactivate.mutate(emp.id)}
                         disabled={deactivate.isPending}
-                        className="text-xs font-medium text-destructive hover:underline disabled:opacity-60"
+                        className="text-xs font-medium text-red-600 hover:text-red-700 hover:underline disabled:opacity-60"
                       >
                         Deactivate
                       </button>
@@ -192,150 +197,140 @@ export default function WorkforcePage() {
       )}
 
       {/* Add employee modal */}
-      {showCreate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-lg border border-border bg-card shadow-lg">
-            <div className="border-b border-border p-5">
-              <h2 className="text-lg font-semibold">Add employee</h2>
-              <p className="text-sm text-muted-foreground">Create a new employee profile</p>
+      <Modal open={showCreate} onOpenChange={setShowCreate}>
+        <ModalContent>
+          <ModalHeader>
+            <ModalTitle>Add employee</ModalTitle>
+            <ModalDescription>Create a new employee profile</ModalDescription>
+          </ModalHeader>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Employee number" required>
+                <input
+                  value={form.employeeNumber}
+                  onChange={(e) => setForm({ ...form, employeeNumber: e.target.value })}
+                  placeholder="EMP-002"
+                  className={inputClass}
+                />
+              </Field>
+              <Field label="Hire date" required>
+                <input
+                  type="date"
+                  value={form.hireDate}
+                  onChange={(e) => setForm({ ...form, hireDate: e.target.value })}
+                  className={inputClass}
+                />
+              </Field>
+              <Field label="First name" required>
+                <input
+                  value={form.firstName}
+                  onChange={(e) => setForm({ ...form, firstName: e.target.value })}
+                  className={inputClass}
+                />
+              </Field>
+              <Field label="Last name" required>
+                <input
+                  value={form.lastName}
+                  onChange={(e) => setForm({ ...form, lastName: e.target.value })}
+                  className={inputClass}
+                />
+              </Field>
+              <Field label="Email" required>
+                <input
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  className={inputClass}
+                />
+              </Field>
+              <Field label="Phone">
+                <input
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  className={inputClass}
+                />
+              </Field>
+              <Field label="Employment type" required>
+                <select
+                  value={form.employmentTypeId}
+                  onChange={(e) => setForm({ ...form, employmentTypeId: e.target.value })}
+                  className={inputClass}
+                >
+                  <option value="">Select…</option>
+                  {(employmentTypes ?? []).map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Branch">
+                <select
+                  value={form.branchId}
+                  onChange={(e) => setForm({ ...form, branchId: e.target.value })}
+                  className={inputClass}
+                >
+                  <option value="">Unassigned</option>
+                  {(branches ?? []).map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Department">
+                <select
+                  value={form.departmentId}
+                  onChange={(e) => setForm({ ...form, departmentId: e.target.value })}
+                  className={inputClass}
+                >
+                  <option value="">Unassigned</option>
+                  {(departments ?? []).map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Primary position">
+                <select
+                  value={form.primaryPositionId}
+                  onChange={(e) => setForm({ ...form, primaryPositionId: e.target.value })}
+                  className={inputClass}
+                >
+                  <option value="">Unassigned</option>
+                  {(positions ?? []).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
             </div>
-            <form onSubmit={handleSubmit} className="space-y-4 p-5">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Employee number" required>
-                  <input
-                    value={form.employeeNumber}
-                    onChange={(e) => setForm({ ...form, employeeNumber: e.target.value })}
-                    placeholder="EMP-002"
-                    className={inputClass}
-                  />
-                </Field>
-                <Field label="Hire date" required>
-                  <input
-                    type="date"
-                    value={form.hireDate}
-                    onChange={(e) => setForm({ ...form, hireDate: e.target.value })}
-                    className={inputClass}
-                  />
-                </Field>
-                <Field label="First name" required>
-                  <input
-                    value={form.firstName}
-                    onChange={(e) => setForm({ ...form, firstName: e.target.value })}
-                    className={inputClass}
-                  />
-                </Field>
-                <Field label="Last name" required>
-                  <input
-                    value={form.lastName}
-                    onChange={(e) => setForm({ ...form, lastName: e.target.value })}
-                    className={inputClass}
-                  />
-                </Field>
-                <Field label="Email" required>
-                  <input
-                    type="email"
-                    value={form.email}
-                    onChange={(e) => setForm({ ...form, email: e.target.value })}
-                    className={inputClass}
-                  />
-                </Field>
-                <Field label="Phone">
-                  <input
-                    value={form.phone}
-                    onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                    className={inputClass}
-                  />
-                </Field>
-                <Field label="Employment type" required>
-                  <select
-                    value={form.employmentTypeId}
-                    onChange={(e) => setForm({ ...form, employmentTypeId: e.target.value })}
-                    className={inputClass}
-                  >
-                    <option value="">Select…</option>
-                    {(employmentTypes ?? []).map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Branch">
-                  <select
-                    value={form.branchId}
-                    onChange={(e) => setForm({ ...form, branchId: e.target.value })}
-                    className={inputClass}
-                  >
-                    <option value="">Unassigned</option>
-                    {(branches ?? []).map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Department">
-                  <select
-                    value={form.departmentId}
-                    onChange={(e) => setForm({ ...form, departmentId: e.target.value })}
-                    className={inputClass}
-                  >
-                    <option value="">Unassigned</option>
-                    {(departments ?? []).map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Primary position">
-                  <select
-                    value={form.primaryPositionId}
-                    onChange={(e) => setForm({ ...form, primaryPositionId: e.target.value })}
-                    className={inputClass}
-                  >
-                    <option value="">Unassigned</option>
-                    {(positions ?? []).map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-              </div>
 
-              {formError && (
-                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  {formError}
-                </div>
-              )}
-
-              <div className="flex justify-end gap-3 border-t border-border pt-4">
-                <button
-                  type="button"
-                  onClick={() => setShowCreate(false)}
-                  className="rounded-md border border-border px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={create.isPending}
-                  className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-60"
-                >
-                  {create.isPending ? 'Saving…' : 'Save employee'}
-                </button>
+            {formError && (
+              <div className="rounded-lg border border-red-300/40 bg-red-500/10 px-3 py-2 text-sm text-red-600">
+                {formError}
               </div>
-            </form>
-          </div>
-        </div>
-      )}
+            )}
+
+            <ModalFooter className="pt-2">
+              <ModalClose asChild>
+                <Button variant="secondary">Cancel</Button>
+              </ModalClose>
+              <Button type="submit" disabled={create.isPending}>
+                {create.isPending ? 'Saving…' : 'Save employee'}
+              </Button>
+            </ModalFooter>
+          </form>
+        </ModalContent>
+      </Modal>
     </div>
   );
 }
 
 const inputClass =
-  'w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring';
+  'w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand transition';
 
 function Field({
   label,
@@ -348,9 +343,9 @@ function Field({
 }) {
   return (
     <div className="space-y-1.5">
-      <label className="text-sm font-medium">
+      <label className="text-sm font-medium text-slate-700">
         {label}
-        {required && <span className="text-destructive"> *</span>}
+        {required && <span className="text-red-500"> *</span>}
       </label>
       {children}
     </div>

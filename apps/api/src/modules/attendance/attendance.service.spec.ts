@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import { AttendanceService } from './attendance.service';
@@ -14,6 +14,9 @@ function companyWideScopeFilter(): never {
     positionWhere: async () => undefined,
   } as never;
 }
+
+const geofenceSvc = { evaluate: vi.fn() };
+const auditSvc = { record: vi.fn() };
 
 function createDeps() {
   const attendanceEvent = {
@@ -35,7 +38,8 @@ function createDeps() {
     findMany: vi.fn(),
   };
   const attendanceCorrection = { create: vi.fn() };
-  const employee = { findFirst: vi.fn() };
+  const employee = { findFirst: vi.fn(), findUnique: vi.fn() };
+  const geofence = { findFirst: vi.fn() };
   const $transaction = vi.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     fn({ attendanceEvent, attendanceRecord, break: breakRecord, attendanceCorrection } as any),
@@ -46,9 +50,10 @@ function createDeps() {
     break: breakRecord,
     attendanceCorrection,
     employee,
+    geofence,
     $transaction,
   };
-  return { prisma, attendanceEvent, attendanceRecord, breakRecord, attendanceCorrection };
+  return { prisma, attendanceEvent, attendanceRecord, breakRecord, attendanceCorrection, employee, geofence };
 }
 
 const clockInDto = {
@@ -74,7 +79,10 @@ describe('AttendanceService — idempotency', () => {
 
     const service = new AttendanceService(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { attendanceEvent, attendanceRecord, attendanceCorrection, $transaction: vi.fn() } as any, companyWideScopeFilter()
+      { attendanceEvent, attendanceRecord, attendanceCorrection, employee: { findUnique: vi.fn() }, geofence: { findFirst: vi.fn() }, $transaction: vi.fn() } as any,
+      companyWideScopeFilter(),
+      geofenceSvc,
+      auditSvc,
     );
     const result = await service.recordClockEvent('c1', 'e1', clockInDto);
 
@@ -86,14 +94,15 @@ describe('AttendanceService — idempotency', () => {
   });
 
   it('never deduplicates an event whose idempotency key exists under another company', async () => {
-    const { prisma, attendanceRecord, attendanceEvent } = createDeps();
+    const { prisma, attendanceRecord, attendanceEvent, employee } = createDeps();
     attendanceEvent.findFirst.mockResolvedValue(null);
     attendanceRecord.findUnique.mockResolvedValue(null);
     attendanceRecord.create.mockResolvedValue({ id: 'rec1' });
+    employee.findUnique.mockResolvedValue({ branchId: null });
     attendanceEvent.create.mockResolvedValue({ id: 'evX' });
     attendanceRecord.update.mockResolvedValue({});
 
-    const service = new AttendanceService(prisma, companyWideScopeFilter());
+    const service = new AttendanceService(prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
     const result = await service.recordClockEvent('c1', 'e1', clockInDto);
 
     expect(result.status).toBe('recorded');
@@ -105,14 +114,15 @@ describe('AttendanceService — idempotency', () => {
   });
 
   it('creates a daily record on first clock_in and stores the earliest clock-in', async () => {
-    const { prisma, attendanceRecord, attendanceEvent } = createDeps();
+    const { prisma, attendanceRecord, attendanceEvent, employee } = createDeps();
     attendanceEvent.findFirst.mockResolvedValue(null);
     attendanceRecord.findUnique.mockResolvedValue(null);
     attendanceRecord.create.mockResolvedValue({ id: 'rec1' });
+    employee.findUnique.mockResolvedValue({ branchId: null });
     attendanceEvent.create.mockResolvedValue({ id: 'ev2' });
     attendanceRecord.update.mockResolvedValue({});
 
-    const service = new AttendanceService(prisma, companyWideScopeFilter());
+    const service = new AttendanceService(prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
     const result = await service.recordClockEvent('c1', 'e1', clockInDto);
 
     expect(result.status).toBe('recorded');
@@ -138,7 +148,7 @@ describe('AttendanceService — idempotency', () => {
     attendanceEvent.create.mockResolvedValue({ id: 'ev3' });
     attendanceRecord.update.mockResolvedValue({});
 
-    const service = new AttendanceService(prisma, companyWideScopeFilter());
+    const service = new AttendanceService(prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
     const result = await service.recordClockEvent('c1', 'e1', clockOutDto);
 
     expect(result.status).toBe('recorded');
@@ -164,7 +174,7 @@ describe('AttendanceService — idempotency', () => {
     ]);
     attendanceRecord.update.mockResolvedValue({});
 
-    const service = new AttendanceService(prisma, companyWideScopeFilter());
+    const service = new AttendanceService(prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
     const result = await service.recordClockEvent('c1', 'e1', {
       eventType: 'break_end',
       clientOccurredAt: '2026-09-02T12:45:00.000Z',
@@ -185,7 +195,7 @@ describe('AttendanceService — corrections', () => {
     const { prisma, attendanceRecord } = createDeps();
     attendanceRecord.findFirst.mockResolvedValue(null);
 
-    const service = new AttendanceService(prisma, companyWideScopeFilter());
+    const service = new AttendanceService(prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
     await expect(
       service.recordCorrection('c1', { attendanceRecordId: 'rec9', field: 'status', newValue: 'present', reason: 'fix' }, 'u1'),
     ).rejects.toBeInstanceOf(NotFoundException);
@@ -197,7 +207,7 @@ describe('AttendanceService — corrections', () => {
     attendanceCorrection.create.mockResolvedValue({ id: 'co1' });
     attendanceRecord.update.mockResolvedValue({});
 
-    const service = new AttendanceService(prisma, companyWideScopeFilter());
+    const service = new AttendanceService(prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
     const dto = { attendanceRecordId: 'rec1', field: 'status', previousValue: 'absent', newValue: 'present', reason: 'Swipe card was faulty' };
     const result = await service.recordCorrection('c1', dto, 'u1');
 
@@ -210,5 +220,152 @@ describe('AttendanceService — corrections', () => {
     expect(attendanceRecord.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { status: 'present' } }),
     );
+  });
+});
+
+describe('AttendanceService — geofenced clock-in', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const fence = {
+    latitude: 40.7128,
+    longitude: -74.006,
+    radiusMeters: 100,
+    branch: { name: 'Downtown' },
+  };
+
+  function geoDto(latitude?: number, longitude?: number) {
+    return {
+      eventType: 'clock_in' as const,
+      clientOccurredAt: '2026-09-02T09:05:00.000Z',
+      source: 'web' as const,
+      idempotencyKey: '44444444-4444-4444-8444-444444444444',
+      latitude,
+      longitude,
+    };
+  }
+
+  it('accepts a clock-in inside the active geofence and persists the evaluated result', async () => {
+    const { prisma, attendanceEvent, attendanceRecord, employee, geofence } = createDeps();
+    attendanceEvent.findFirst.mockResolvedValue(null);
+    attendanceRecord.findUnique.mockResolvedValue(null);
+    attendanceRecord.create.mockResolvedValue({ id: 'rec1' });
+    employee.findUnique.mockResolvedValue({ branchId: 'b1' });
+    geofence.findFirst.mockResolvedValue(fence as never);
+    geofenceSvc.evaluate.mockReturnValue({ distanceMeters: 50, radiusMeters: 100, inside: true });
+    attendanceEvent.create.mockResolvedValue({ id: 'evG' });
+    attendanceRecord.update.mockResolvedValue({});
+
+    const service = new AttendanceService(prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
+    const result = await service.recordClockEvent('c1', 'e1', geoDto(-74.0055, 40.7129));
+
+    expect(result.status).toBe('recorded');
+    expect(geofenceSvc.evaluate).toHaveBeenCalledWith(
+      { latitude: -74.0055, longitude: 40.7129 },
+      { latitude: 40.7128, longitude: -74.006, radiusMeters: 100 },
+    );
+    expect(attendanceEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          latitude: -74.0055,
+          longitude: 40.7129,
+          geofenceResult: JSON.stringify({ inside: true, distanceMeters: 50, radiusMeters: 100 }),
+        }),
+      }),
+    );
+  });
+
+  it('rejects a clock-in outside the geofence without creating a record/event and audits the denial', async () => {
+    const { prisma, attendanceEvent, attendanceRecord, employee, geofence } = createDeps();
+    attendanceEvent.findFirst.mockResolvedValue(null);
+    employee.findUnique.mockResolvedValue({ branchId: 'b1' });
+    geofence.findFirst.mockResolvedValue(fence as never);
+    geofenceSvc.evaluate.mockReturnValue({ distanceMeters: 500, radiusMeters: 100, inside: false });
+
+    const service = new AttendanceService(prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
+    await expect(service.recordClockEvent('c1', 'e1', geoDto(-73.99, 40.75))).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+
+    expect(attendanceEvent.create).not.toHaveBeenCalled();
+    expect(attendanceRecord.create).not.toHaveBeenCalled();
+    expect(auditSvc.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'attendance.clock_in.geofence_denied', resourceId: 'e1' }),
+    );
+  });
+
+  it('rejects a clock-in without coordinates when an active geofence applies', async () => {
+    const { prisma, attendanceEvent, attendanceRecord, employee, geofence } = createDeps();
+    attendanceEvent.findFirst.mockResolvedValue(null);
+    employee.findUnique.mockResolvedValue({ branchId: 'b1' });
+    geofence.findFirst.mockResolvedValue(fence as never);
+
+    const service = new AttendanceService(prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
+    await expect(service.recordClockEvent('c1', 'e1', geoDto())).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(attendanceEvent.create).not.toHaveBeenCalled();
+    expect(attendanceRecord.create).not.toHaveBeenCalled();
+  });
+
+  it('does not trust client-supplied metadata: an outside result is rejected regardless of spoofed data', async () => {
+    const { prisma, attendanceEvent, employee, geofence } = createDeps();
+    attendanceEvent.findFirst.mockResolvedValue(null);
+    employee.findUnique.mockResolvedValue({ branchId: 'b1' });
+    geofence.findFirst.mockResolvedValue(fence as never);
+    geofenceSvc.evaluate.mockReturnValue({ distanceMeters: 9999, radiusMeters: 100, inside: false });
+
+    const spoofed = { ...geoDto(-73.99, 40.75), metadata: { inside: true, distanceMeters: 1 } };
+    const service = new AttendanceService(prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
+    await expect(service.recordClockEvent('c1', 'e1', spoofed)).rejects.toBeInstanceOf(BadRequestException);
+    expect(attendanceEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps clock-out geofence-independent when an active geofence exists', async () => {
+    const { prisma, attendanceEvent, attendanceRecord, employee, geofence } = createDeps();
+    attendanceEvent.findFirst.mockResolvedValue(null);
+    attendanceRecord.findUnique.mockResolvedValue({
+      id: 'rec1',
+      effectiveClockIn: new Date('2026-09-02T09:00:00.000Z'),
+      effectiveClockOut: null,
+      totalWorkedMinutes: 0,
+    });
+    // Employee is assigned to a geofenced branch, but clock-out must NOT be enforced.
+    employee.findUnique.mockResolvedValue({ branchId: 'b1' });
+    geofence.findFirst.mockResolvedValue(fence as never);
+    attendanceEvent.create.mockResolvedValue({ id: 'evC' });
+    attendanceRecord.update.mockResolvedValue({});
+
+    const service = new AttendanceService(prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
+    const result = await service.recordClockEvent('c1', 'e1', {
+      eventType: 'clock_out',
+      clientOccurredAt: '2026-09-02T17:10:00.000Z',
+      source: 'web',
+      idempotencyKey: '55555555-5555-4555-8555-555555555555',
+    });
+
+    expect(result.status).toBe('recorded');
+    expect(geofenceSvc.evaluate).not.toHaveBeenCalled();
+    expect(attendanceEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ eventType: 'clock_out', geofenceResult: undefined }),
+      }),
+    );
+  });
+
+  it('preserves original behavior when the employee has no active geofence', async () => {
+    const { prisma, attendanceEvent, attendanceRecord, employee, geofence } = createDeps();
+    attendanceEvent.findFirst.mockResolvedValue(null);
+    attendanceRecord.findUnique.mockResolvedValue(null);
+    attendanceRecord.create.mockResolvedValue({ id: 'rec1' });
+    employee.findUnique.mockResolvedValue({ branchId: null });
+    attendanceEvent.create.mockResolvedValue({ id: 'evP' });
+    attendanceRecord.update.mockResolvedValue({});
+
+    const service = new AttendanceService(prisma, companyWideScopeFilter(), geofenceSvc, auditSvc);
+    const result = await service.recordClockEvent('c1', 'e1', geoDto(-74.0, 40.71));
+
+    expect(result.status).toBe('recorded');
+    expect(geofence.findFirst).not.toHaveBeenCalled();
+    expect(geofenceSvc.evaluate).not.toHaveBeenCalled();
+    expect(attendanceEvent.create).toHaveBeenCalled();
   });
 });

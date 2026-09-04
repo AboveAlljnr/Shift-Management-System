@@ -1,11 +1,22 @@
 ﻿'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Calendar } from 'lucide-react';
+import { Calendar, Plus, Sparkles } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Modal,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
+  ModalTitle,
+  ModalDescription,
+  ModalClose,
+} from '@/components/ui/modal';
 import {
   applyScheduleSuggestions,
   assignEmployeeToShift,
@@ -19,7 +30,7 @@ import {
   type ShiftDetail,
   type SuggestedAssignment,
 } from '@/lib/api/queries';
-import { cn, formatTime } from '@/lib/utils';
+import { formatTime } from '@/lib/utils';
 import { format, parseISO } from 'date-fns';
 
 interface ConflictItem {
@@ -38,7 +49,7 @@ function extractConflicts(err: unknown): { message: string; conflicts?: Conflict
 }
 
 const inputClass =
-  'w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring';
+  'w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand transition';
 
 export default function SchedulePage() {
   const queryClient = useQueryClient();
@@ -100,42 +111,40 @@ export default function SchedulePage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Schedule</h1>
-          <p className="text-sm text-muted-foreground">{(shifts ?? []).length} shifts · create, assign, and track</p>
+          <h1 className="text-xl font-bold text-slate-900 font-sans">Schedule</h1>
+          <p className="text-sm text-slate-500 mt-0.5">{(shifts ?? []).length} shifts · create, assign, and track</p>
         </div>
-        <button
-          onClick={() => setShowGenerate(true)}
-          className="rounded-md border border-border px-4 py-2 text-sm font-semibold text-muted-foreground transition-colors hover:bg-muted"
-        >
-          Generate suggested schedule
-        </button>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
-        >
-          New shift
-        </button>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={() => setShowGenerate(true)} className="gap-2">
+            <Sparkles size={14} className="text-brand" />
+            Smart Schedule Optimizer
+          </Button>
+          <Button variant="primary" size="sm" onClick={() => setShowCreate(true)} className="gap-2">
+            <Plus size={14} />
+            New shift
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (
         <div className="space-y-3">
           {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="h-16 animate-pulse rounded-lg bg-muted" />
+            <div key={i} className="h-16 animate-pulse rounded-xl bg-slate-200/60" />
           ))}
         </div>
       ) : grouped.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
-            <Calendar className="h-8 w-8 text-muted-foreground" />
-            <p className="font-medium">No shifts yet</p>
-            <p className="text-sm text-muted-foreground">Create a shift to start building your schedule.</p>
+            <Calendar className="h-8 w-8 text-slate-400" />
+            <p className="font-semibold text-slate-700">No shifts yet</p>
+            <p className="text-sm text-slate-500">Create a shift to start building your schedule.</p>
           </CardContent>
         </Card>
       ) : (
         <div className="space-y-6">
           {grouped.map(([day, dayShifts]) => (
             <section key={day}>
-              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              <h2 className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400">
                 {format(parseISO(day), 'EEEE, MMMM d')}
               </h2>
               <div className="space-y-3">
@@ -153,109 +162,98 @@ export default function SchedulePage() {
         </div>
       )}
 
-      {showCreate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-lg border border-border bg-card shadow-lg">
-            <div className="border-b border-border p-5">
-              <h2 className="text-lg font-semibold">New shift</h2>
-              <p className="text-sm text-muted-foreground">Create a shift slot</p>
+      <Modal open={showCreate} onOpenChange={setShowCreate}>
+        <ModalContent>
+          <ModalHeader>
+            <ModalTitle>New shift</ModalTitle>
+            <ModalDescription>Create a shift slot</ModalDescription>
+          </ModalHeader>
+          <form onSubmit={handleCreateSubmit} className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-slate-700">
+                Shift name <span className="text-red-500">*</span>
+              </label>
+              <Input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="e.g. Morning opening"
+              />
             </div>
-            <form onSubmit={handleCreateSubmit} className="space-y-4 p-5">
+            <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">
-                  Shift name <span className="text-destructive">*</span>
+                <label className="text-sm font-medium text-slate-700">
+                  Branch <span className="text-red-500">*</span>
+                </label>
+                <select value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })} className={inputClass}>
+                  <option value="">Select…</option>
+                  {(branches ?? []).map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-slate-700">Department (optional)</label>
+                <select value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })} className={inputClass}>
+                  <option value="">None</option>
+                  {(departments ?? []).map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-slate-700">
+                  Start <span className="text-red-500">*</span>
                 </label>
                 <input
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="e.g. Morning opening"
+                  type="datetime-local"
+                  value={form.startAt}
+                  onChange={(e) => setForm({ ...form, startAt: e.target.value })}
                   className={inputClass}
                 />
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">
-                    Branch <span className="text-destructive">*</span>
-                  </label>
-                  <select value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })} className={inputClass}>
-                    <option value="">Select…</option>
-                    {(branches ?? []).map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Department (optional)</label>
-                  <select value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })} className={inputClass}>
-                    <option value="">None</option>
-                    {(departments ?? []).map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">
-                    Start <span className="text-destructive">*</span>
-                  </label>
-                  <input
-                    type="datetime-local"
-                    value={form.startAt}
-                    onChange={(e) => setForm({ ...form, startAt: e.target.value })}
-                    className={inputClass}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">
-                    End <span className="text-destructive">*</span>
-                  </label>
-                  <input
-                    type="datetime-local"
-                    value={form.endAt}
-                    onChange={(e) => setForm({ ...form, endAt: e.target.value })}
-                    className={inputClass}
-                  />
-                </div>
               </div>
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">Notes</label>
-                <textarea
-                  value={form.notes}
-                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                  rows={2}
+                <label className="text-sm font-medium text-slate-700">
+                  End <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="datetime-local"
+                  value={form.endAt}
+                  onChange={(e) => setForm({ ...form, endAt: e.target.value })}
                   className={inputClass}
                 />
               </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-slate-700">Notes</label>
+              <textarea
+                value={form.notes}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                rows={2}
+                className={inputClass}
+              />
+            </div>
 
-              {formError && (
-                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  {formError}
-                </div>
-              )}
-
-              <div className="flex justify-end gap-3 border-t border-border pt-4">
-                <button
-                  type="button"
-                  onClick={() => setShowCreate(false)}
-                  className="rounded-md border border-border px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={create.isPending}
-                  className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-60"
-                >
-                  {create.isPending ? 'Saving…' : 'Create shift'}
-                </button>
+            {formError && (
+              <div className="rounded-lg border border-red-300/40 bg-red-500/10 px-3 py-2 text-sm text-red-600">
+                {formError}
               </div>
-            </form>
-          </div>
-        </div>
-      )}
+            )}
+
+            <ModalFooter className="pt-2">
+              <ModalClose asChild>
+                <Button variant="secondary">Cancel</Button>
+              </ModalClose>
+              <Button type="submit" disabled={create.isPending}>
+                {create.isPending ? 'Saving…' : 'Create shift'}
+              </Button>
+            </ModalFooter>
+          </form>
+        </ModalContent>
+      </Modal>
 
       {showGenerate && (
         <GenerateSuggestionsDialog
@@ -359,22 +357,29 @@ function GenerateSuggestionsDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg border border-border bg-card shadow-lg">
-        <div className="border-b border-border p-5">
-          <h2 className="text-lg font-semibold">Generate suggested schedule</h2>
-          <p className="text-sm text-muted-foreground">
-            The optimizer proposes assignments. Review before applying — nothing is written until you confirm.
-          </p>
-        </div>
+    <Modal open onOpenChange={(o) => !o && onClose()}>
+      <ModalContent className="max-w-2xl">
+        <ModalHeader>
+          <div className="flex items-center gap-2 pt-1">
+            <div className="w-8 h-8 rounded-lg bg-brand-light flex items-center justify-center">
+              <Sparkles size={16} className="text-brand" />
+            </div>
+            <ModalTitle>Smart Schedule Optimizer</ModalTitle>
+          </div>
+          <ModalDescription>
+            Generate a constraint-aware schedule using workforce availability, approved leave,
+            working-hour limits, and rest requirements. Review before applying — nothing is
+            written until you confirm.
+          </ModalDescription>
+        </ModalHeader>
 
-        <div className="space-y-4 overflow-y-auto p-5">
+        <div className="space-y-4">
           {!suggestion ? (
             <form onSubmit={handleGenerate} className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">
-                    Branch <span className="text-destructive">*</span>
+                  <label className="text-sm font-medium text-slate-700">
+                    Branch <span className="text-red-500">*</span>
                   </label>
                   <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className={inputClass}>
                     <option value="">Select…</option>
@@ -386,7 +391,7 @@ function GenerateSuggestionsDialog({
                   </select>
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Department (optional)</label>
+                  <label className="text-sm font-medium text-slate-700">Department (optional)</label>
                   <select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} className={inputClass}>
                     <option value="">All departments</option>
                     {departments.map((d) => (
@@ -397,41 +402,33 @@ function GenerateSuggestionsDialog({
                   </select>
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">
-                    Start date <span className="text-destructive">*</span>
+                  <label className="text-sm font-medium text-slate-700">
+                    Start date <span className="text-red-500">*</span>
                   </label>
                   <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={inputClass} />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">
-                    End date <span className="text-destructive">*</span>
+                  <label className="text-sm font-medium text-slate-700">
+                    End date <span className="text-red-500">*</span>
                   </label>
                   <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className={inputClass} />
                 </div>
               </div>
 
               {error && (
-                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <div className="rounded-lg border border-red-300/40 bg-red-500/10 px-3 py-2 text-sm text-red-600">
                   {error}
                 </div>
               )}
 
-              <div className="flex justify-end gap-3 border-t border-border pt-4">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="rounded-md border border-border px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted"
-                >
+              <ModalFooter className="pt-2">
+                <Button variant="secondary" onClick={onClose}>
                   Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={generate.isPending}
-                  className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-60"
-                >
+                </Button>
+                <Button type="submit" disabled={generate.isPending} className="gap-2">
                   {generate.isPending ? 'Building your suggested schedule…' : 'Generate suggestions'}
-                </button>
-              </div>
+                </Button>
+              </ModalFooter>
             </form>
           ) : (
             <div className="space-y-4">
@@ -443,12 +440,12 @@ function GenerateSuggestionsDialog({
               </div>
 
               {suggestion.suggestedCount === 0 ? (
-                <p className="rounded-md border border-amber-300/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">
                   No suggestions were produced. Adjust the range or check employee availability and approved leave.
-                </p>
+                </div>
               ) : (
                 <div className="space-y-2">
-                  <p className="text-sm font-medium">Proposed assignments</p>
+                  <p className="text-sm font-bold text-slate-700">Proposed assignments</p>
                   {Array.from(
                     suggestion.assignments.reduce((map, a) => {
                       const list = map.get(a.shiftId) ?? [];
@@ -457,15 +454,17 @@ function GenerateSuggestionsDialog({
                       return map;
                     }, new Map<string, SuggestedAssignment[]>()),
                   ).map(([shiftId, list]) => (
-                    <div key={shiftId} className="flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-2">
-                      <span className="text-sm font-medium">{shiftName(shiftId)}</span>
+                    <div key={shiftId} className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 bg-slate-50/50">
+                      <span className="text-sm font-semibold text-slate-800">{shiftName(shiftId)}</span>
                       <div className="flex flex-wrap gap-1">
                         {list.map((a) => (
-                          <span key={a.employeeId} className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs">
+                          <span key={a.employeeId} className="inline-flex items-center gap-1 rounded-full bg-brand-light px-2 py-0.5 text-xs font-medium text-brand-dark">
                             {employeeName(a.employeeId)}
-                            {a.warnings.length > 0 && <span className="font-bold text-amber-600" title={a.warnings.map((w) => w.message).join('; ')}>
-                              !
-                            </span>}
+                            {a.warnings.length > 0 && (
+                              <span className="font-bold text-amber-600" title={a.warnings.map((w) => w.message).join('; ')}>
+                                !
+                              </span>
+                            )}
                           </span>
                         ))}
                       </div>
@@ -475,54 +474,44 @@ function GenerateSuggestionsDialog({
               )}
 
               {applyMsg && (
-                <div className="rounded-md border border-emerald-300/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700">
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
                   {applyMsg}
                 </div>
               )}
               {apply.isError && error && (
-                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <div className="rounded-lg border border-red-300/40 bg-red-500/10 px-3 py-2 text-sm text-red-600">
                   {error}
                 </div>
               )}
 
-              <div className="flex justify-end gap-3 border-t border-border pt-4">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="rounded-md border border-border px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted"
-                >
+              <ModalFooter className="pt-2">
+                <Button variant="secondary" onClick={onClose}>
                   Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSuggestion(null)}
-                  className="rounded-md border border-border px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted"
-                >
+                </Button>
+                <Button variant="secondary" onClick={() => setSuggestion(null)}>
                   Regenerate
-                </button>
-                <button
-                  type="button"
+                </Button>
+                <Button
                   onClick={() => apply.mutate()}
                   disabled={apply.isPending || suggestion.suggestedCount === 0}
-                  className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-60"
                 >
                   {apply.isPending ? 'Applying…' : 'Apply suggestions'}
-                </button>
-              </div>
+                </Button>
+              </ModalFooter>
             </div>
           )}
         </div>
-      </div>
-    </div>
+      </ModalContent>
+    </Modal>
   );
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border px-3 py-2">
-      <p className="text-2xl font-bold">{value}</p>
-      <p className="text-xs text-muted-foreground">{label}</p>
-    </div>
+    <Card className="px-3 py-2">
+      <p className="text-2xl font-bold text-slate-900 font-sans">{value}</p>
+      <p className="text-xs text-slate-500">{label}</p>
+    </Card>
   );
 }
 
@@ -535,7 +524,8 @@ function ShiftCard({
   employees: { id: string; firstName: string; lastName: string }[];
   departments: { id: string; name: string }[];
 }) {
-  const queryClient = useQueryClient();  const [assigning, setAssigning] = useState(false);
+  const queryClient = useQueryClient();
+  const [assigning, setAssigning] = useState(false);
   const [employeeId, setEmployeeId] = useState('');
   const [result, setResult] = useState<{ message?: string; conflicts?: ConflictItem[]; warnings?: ConflictItem[] } | null>(null);
 
@@ -555,14 +545,14 @@ function ShiftCard({
   const deptName = departments.find((d) => d.id === shift.departmentId)?.name;
 
   return (
-    <Card>
+    <Card className="shift-card">
       <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="font-medium">{shift.name}</p>
+            <p className="font-semibold text-slate-800">{shift.name}</p>
             <StatusBadge status={shift.status} />
           </div>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-slate-500 font-mono">
             {formatTime(shift.startAt)} – {formatTime(shift.endAt)}
             {shift.branch ? ` · ${shift.branch.name}` : ''}
             {deptName ? ` · ${deptName}` : ''}
@@ -572,7 +562,7 @@ function ShiftCard({
               {shift.assignments.map((a) => (
                 <span
                   key={a.id}
-                  className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium"
+                  className="inline-flex items-center rounded-full bg-brand-light px-2 py-0.5 text-xs font-medium text-brand-dark"
                 >
                   {a.employee.firstName} {a.employee.lastName}
                 </span>
@@ -582,12 +572,9 @@ function ShiftCard({
         </div>
 
         <div className="flex shrink-0 flex-col items-end gap-2">
-          <button
-            onClick={() => setAssigning((v) => !v)}
-            className="rounded-md border border-border px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted"
-          >
+          <Button variant="secondary" size="sm" onClick={() => setAssigning((v) => !v)}>
             {assigning ? 'Cancel' : 'Assign'}
-          </button>
+          </Button>
           {assigning && (
             <div className="flex gap-2">
               <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} className={cn(inputClass, 'min-w-40')}>
@@ -598,23 +585,23 @@ function ShiftCard({
                   </option>
                 ))}
               </select>
-              <button
+              <Button
                 onClick={() => employeeId && assign.mutate()}
                 disabled={!employeeId || assign.isPending}
-                className="rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground disabled:opacity-60"
+                size="sm"
               >
                 {assign.isPending ? '…' : 'Assign'}
-              </button>
+              </Button>
             </div>
           )}
         </div>
       </CardContent>
 
       {(result?.message || result?.conflicts || result?.warnings) && (
-        <div className="border-t border-border px-4 py-3">
-          {result?.message && <p className="text-sm font-medium text-destructive">{result.message}</p>}
+        <div className="border-t border-slate-100 px-4 py-3">
+          {result?.message && <p className="text-sm font-semibold text-red-600">{result.message}</p>}
           {result?.conflicts?.map((c) => (
-            <p key={c.ruleIdentifier + c.message} className="text-xs text-destructive">
+            <p key={c.ruleIdentifier + c.message} className="text-xs text-red-600">
               {c.message} (blocking)
             </p>
           ))}
@@ -638,4 +625,8 @@ function groupByDay(shifts: ShiftDetail[]): [string, ShiftDetail[]][] {
     map.set(day, list);
   }
   return Array.from(map.entries());
+}
+
+function cn(...inputs: (string | false | undefined | null)[]): string {
+  return inputs.filter(Boolean).join(' ');
 }

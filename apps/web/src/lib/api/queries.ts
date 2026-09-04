@@ -29,6 +29,11 @@ async function patchData<T>(url: string, body?: unknown): Promise<T> {
   return data.data;
 }
 
+async function putData<T>(url: string, body?: unknown): Promise<T> {
+  const { data } = await apiClient.put<{ data: T; message: string }>(url, body);
+  return data.data;
+}
+
 // ---- Response types (relations as returned by the API) ----
 
 export interface EmployeeDetail extends Employee {
@@ -264,14 +269,29 @@ export interface ClockEventPayload {
   clientOccurredAt: string;
   source: 'mobile' | 'web' | 'device' | 'offline_sync';
   idempotencyKey: string;
+  latitude?: number;
+  longitude?: number;
 }
 
-export function recordClockEvent(payload: Omit<ClockEventPayload, 'source'>): Promise<{
+export function recordClockEvent(
+  payload: Omit<ClockEventPayload, 'source'>,
+): Promise<{
   status: string;
   eventId: string;
   recordId?: string;
 }> {
   return postData('/attendance/events', { ...payload, source: 'web' });
+}
+
+export interface MyGeofenceStatus {
+  applicable: boolean;
+  branchId?: string;
+  branchName?: string;
+  radiusMeters?: number;
+}
+
+export function fetchMyGeofenceStatus(): Promise<MyGeofenceStatus> {
+  return getData<MyGeofenceStatus>('/attendance/me/geofence');
 }
 
 export function fetchDailyAttendance(date: string): Promise<AttendanceRecordDetail[]> {
@@ -356,6 +376,36 @@ export function createDepartment(body: { branchId: string; name: string; code: s
 
 export function createTeam(body: { departmentId: string; name: string; code: string }): Promise<Team> {
   return postData<Team>('/organization/teams', body);
+}
+
+export interface BranchGeofence {
+  id: string;
+  companyId: string;
+  branchId: string | null;
+  name: string;
+  latitude: number;
+  longitude: number;
+  radiusMeters: number;
+  isActive: boolean;
+}
+
+export interface BranchGeofenceInput {
+  latitude: number;
+  longitude: number;
+  radiusMeters: number;
+  name?: string;
+  isActive?: boolean;
+}
+
+export function fetchBranchGeofence(branchId: string): Promise<BranchGeofence | null> {
+  return getData<BranchGeofence | null>(`/organization/branches/${branchId}/geofence`);
+}
+
+export function configureBranchGeofence(
+  branchId: string,
+  body: BranchGeofenceInput,
+): Promise<BranchGeofence> {
+  return putData<BranchGeofence>(`/organization/branches/${branchId}/geofence`, body);
 }
 
 export { patchData as updateResource };

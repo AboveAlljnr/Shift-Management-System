@@ -2,16 +2,21 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Body,
+  Param,
   Query,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { BranchGeofenceSchema } from '@sms/shared';
+import type { BranchGeofenceDto } from '@sms/shared';
 
 import {
   CompanyId,
   CurrentUser,
 } from '../../common/decorators/current-user.decorator';
 import type { AuthUser } from '../../common/decorators/current-user.decorator';
+import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 
 import { OrganizationService } from './organization.service';
 
@@ -37,6 +42,33 @@ export class OrganizationController {
     @Body() body: { name: string; code: string; timezone?: string; address?: string },
   ) {
     return this.orgService.createBranch(companyId, body);
+  }
+
+  @Put('branches/:branchId/geofence')
+  @ApiOperation({ summary: 'Configure a branch geofence for geofenced clock-in (company + scope guarded)' })
+  async configureBranchGeofence(
+    @CompanyId() companyId: string,
+    @Param('branchId') branchId: string,
+    @Body(new ZodValidationPipe(BranchGeofenceSchema)) dto: BranchGeofenceDto,
+    @CurrentUser() user?: AuthUser,
+  ) {
+    return this.orgService.configureBranchGeofence(
+      companyId,
+      branchId,
+      dto,
+      user?.membershipId ?? '',
+      user ? { id: user.id, email: user.email } : undefined,
+    );
+  }
+
+  @Get('branches/:branchId/geofence')
+  @ApiOperation({ summary: 'Get the configured geofence for a branch (company + scope guarded)' })
+  async getBranchGeofence(
+    @CompanyId() companyId: string,
+    @Param('branchId') branchId: string,
+    @CurrentUser() user?: AuthUser,
+  ) {
+    return this.orgService.getBranchGeofence(companyId, branchId, user?.membershipId ?? '');
   }
 
   @Get('departments')

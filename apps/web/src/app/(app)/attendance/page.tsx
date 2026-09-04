@@ -1,14 +1,23 @@
 ﻿'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { ClipboardCheck } from 'lucide-react';
+import { ClipboardCheck, Users, Clock, AlertTriangle } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { PageHeader } from '@/components/ui/page-header';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { fetchDailyAttendance, fetchEmployeeAttendance, fetchMyEmployee } from '@/lib/api/queries';
 import { getAuthUser } from '@/lib/auth';
-import { cn, formatTime } from '@/lib/utils';
+import { formatTime } from '@/lib/utils';
 import { format, parseISO } from 'date-fns';
 
 function toLocalDateInput(d: Date): string {
@@ -42,101 +51,128 @@ export default function AttendancePage() {
   const today = selectedDate;
   const todayRecords = myHistory ?? [];
 
+  const present = (daily ?? []).filter((r) => ['present', 'late'].includes(r.status)).length;
+  const late = (daily ?? []).filter((r) => r.status === 'late').length;
+  const absent = (daily ?? []).filter((r) => ['absent', 'missing_clock_in', 'missing_clock_out'].includes(r.status)).length;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Attendance</h1>
-          <p className="text-sm text-muted-foreground">
-            {isManager ? 'Company-wide daily overview' : 'Your time and attendance'}
-          </p>
-        </div>
+        <PageHeader
+          title="Attendance"
+          subtitle={isManager ? 'Company-wide daily overview' : 'Your time and attendance'}
+        />
         <input
           type="date"
           value={selectedDate}
           onChange={(e) => setSelectedDate(e.target.value)}
-          className="rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand transition sm:w-auto"
         />
       </div>
 
       <div className="grid gap-6">
         {/* Today's summary cards */}
-        <div className="grid gap-3 sm:grid-cols-3">
-          <SummaryCard label="Present" tone="success" value={(daily ?? []).filter((r) => ['present', 'late'].includes(r.status)).length} />
-          <SummaryCard label="Late" tone="warning" value={(daily ?? []).filter((r) => r.status === 'late').length} />
-          <SummaryCard label="Absent / missing" tone="danger" value={(daily ?? []).filter((r) => ['absent', 'missing_clock_in', 'missing_clock_out'].includes(r.status)).length} />
+        <div className="grid gap-4 sm:grid-cols-3">
+          <StatCard label="Present" value={present} sub={late > 0 ? `${late} late` : undefined} accent="#16A34A" icon={<Users size={16} />} />
+          <StatCard label="Late" value={late} sub="Arrived after shift start" accent="#D97706" icon={<Clock size={16} />} />
+          <StatCard label="Absent / missing" value={absent} sub="Requires attention" accent="#DC2626" icon={<AlertTriangle size={16} />} />
         </div>
 
         {isManager ? (
           <Card>
             <CardHeader>
-              <CardTitle>Daily attendance — {format(parseISO(today), 'MMM d, yyyy')}</CardTitle>
+              <CardTitle className="text-base font-bold text-slate-900 font-sans">Daily attendance — {format(parseISO(today), 'MMM d, yyyy')}</CardTitle>
               <CardDescription>Normalized records for all employees</CardDescription>
             </CardHeader>
             <CardContent className="p-0">
               {isLoading ? (
-                <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+                <div className="p-6 text-sm text-slate-500">Loading…</div>
               ) : (daily ?? []).length === 0 ? (
                 <div className="px-6 py-10 text-center">
-                  <ClipboardCheck className="mx-auto h-8 w-8 text-muted-foreground" />
-                  <p className="mt-2 text-sm text-muted-foreground">No attendance records for this day.</p>
+                  <ClipboardCheck className="mx-auto h-8 w-8 text-slate-400" />
+                  <p className="mt-2 text-sm text-slate-500">No attendance records for this day.</p>
                 </div>
               ) : (
-                <ul className="divide-y divide-border">
-                  {(daily ?? []).map((rec) => (
-                    <li key={rec.id} className="flex flex-wrap items-center justify-between gap-3 px-6 py-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">
-                          {rec.employee.firstName} {rec.employee.lastName}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {rec.employee.branch?.name ?? '—'} · {rec.employee.department?.name ?? '—'}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs text-muted-foreground">
-                          {rec.effectiveClockIn ? formatTime(rec.effectiveClockIn) : '—'} →
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Employee</TableHead>
+                      <TableHead>Branch</TableHead>
+                      <TableHead className="hidden sm:table-cell">Clock in</TableHead>
+                      <TableHead className="hidden sm:table-cell">Clock out</TableHead>
+                      <TableHead className="hidden md:table-cell">Hours</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(daily ?? []).map((rec) => (
+                      <TableRow key={rec.id}>
+                        <TableCell>
+                          <p className="text-sm font-semibold text-slate-800">
+                            {rec.employee.firstName} {rec.employee.lastName}
+                          </p>
+                          <p className="text-xs text-slate-400 sm:hidden">
+                            {rec.effectiveClockIn ? formatTime(rec.effectiveClockIn) : '—'} → {rec.effectiveClockOut ? formatTime(rec.effectiveClockOut) : '—'}
+                          </p>
+                        </TableCell>
+                        <TableCell>
+                          <p className="text-sm text-slate-600">{rec.employee.branch?.name ?? '—'}</p>
+                          <p className="text-xs text-slate-400">{rec.employee.department?.name ?? '—'}</p>
+                        </TableCell>
+                        <TableCell className="hidden sm:table-cell text-sm text-slate-600 font-mono">
+                          {rec.effectiveClockIn ? formatTime(rec.effectiveClockIn) : '—'}
+                        </TableCell>
+                        <TableCell className="hidden sm:table-cell text-sm text-slate-600 font-mono">
                           {rec.effectiveClockOut ? formatTime(rec.effectiveClockOut) : '—'}
-                        </span>
-                        {rec.totalWorkedMinutes > 0 && (
-                          <span className="text-xs text-muted-foreground">
-                            {Math.floor(rec.totalWorkedMinutes / 60)}h {rec.totalWorkedMinutes % 60}m
-                          </span>
-                        )}
-                        <StatusBadge status={rec.status} />
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell text-sm text-slate-600 font-mono">
+                          {rec.totalWorkedMinutes > 0 ? `${Math.floor(rec.totalWorkedMinutes / 60)}h ${rec.totalWorkedMinutes % 60}m` : '—'}
+                        </TableCell>
+                        <TableCell>
+                          <StatusBadge status={rec.status} />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               )}
             </CardContent>
           </Card>
         ) : (
           <Card>
             <CardHeader>
-              <CardTitle>My record — {format(parseISO(today), 'MMM d, yyyy')}</CardTitle>
+              <CardTitle className="text-base font-bold text-slate-900 font-sans">My record — {format(parseISO(today), 'MMM d, yyyy')}</CardTitle>
               <CardDescription>Your clock events and status</CardDescription>
             </CardHeader>
             <CardContent className="p-0">
               {todayRecords.length === 0 ? (
                 <div className="px-6 py-10 text-center">
-                  <ClipboardCheck className="mx-auto h-8 w-8 text-muted-foreground" />
-                  <p className="mt-2 text-sm text-muted-foreground">No attendance record for this day yet.</p>
+                  <ClipboardCheck className="mx-auto h-8 w-8 text-slate-400" />
+                  <p className="mt-2 text-sm text-slate-500">No attendance record for this day yet.</p>
                 </div>
               ) : (
-                <ul className="divide-y divide-border">
-                  {todayRecords.map((rec) => (
-                    <li key={rec.id} className="px-6 py-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <StatusBadge status={rec.status} />
-                        <span className="text-xs text-muted-foreground">
-                          Clock in: {rec.effectiveClockIn ? formatTime(rec.effectiveClockIn) : '—'} · Clock out:{' '}
-                          {rec.effectiveClockOut ? formatTime(rec.effectiveClockOut) : '—'}
-                        </span>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Clock in</TableHead>
+                      <TableHead>Clock out</TableHead>
+                      <TableHead className="hidden md:table-cell">Worked</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {todayRecords.map((rec) => (
+                      <TableRow key={rec.id}>
+                        <TableCell><StatusBadge status={rec.status} /></TableCell>
+                        <TableCell className="text-sm text-slate-600 font-mono">{rec.effectiveClockIn ? formatTime(rec.effectiveClockIn) : '—'}</TableCell>
+                        <TableCell className="text-sm text-slate-600 font-mono">{rec.effectiveClockOut ? formatTime(rec.effectiveClockOut) : '—'}</TableCell>
+                        <TableCell className="hidden md:table-cell text-sm text-slate-600 font-mono">
+                          {rec.totalWorkedMinutes > 0 ? `${Math.floor(rec.totalWorkedMinutes / 60)}h ${rec.totalWorkedMinutes % 60}m` : '—'}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               )}
             </CardContent>
           </Card>
@@ -146,21 +182,31 @@ export default function AttendancePage() {
   );
 }
 
-function SummaryCard({ label, value, tone }: { label: string; value: number; tone: string }) {
-  const color =
-    tone === 'success'
-      ? 'text-emerald-700'
-      : tone === 'warning'
-        ? 'text-amber-700'
-        : tone === 'danger'
-          ? 'text-rose-700'
-          : 'text-foreground';
+function StatCard({
+  label,
+  value,
+  sub,
+  accent,
+  icon,
+}: {
+  label: string;
+  value: number;
+  sub?: string;
+  accent?: string;
+  icon: React.ReactNode;
+}) {
   return (
-    <Card>
-      <CardContent className={cn('p-5', color)}>
-        <p className="text-sm text-muted-foreground">{label}</p>
-        <p className="mt-1 text-2xl font-bold">{value}</p>
-      </CardContent>
+    <Card className="p-5">
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">{label}</p>
+          <p className="text-3xl font-bold text-slate-900 font-sans">{value}</p>
+          {sub && <p className="text-xs text-slate-500 mt-1">{sub}</p>}
+        </div>
+        <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: `${accent}18`, color: accent }}>
+          {icon}
+        </div>
+      </div>
     </Card>
   );
 }

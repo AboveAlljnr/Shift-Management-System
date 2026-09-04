@@ -1,17 +1,22 @@
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import type { ClockEventDto, AttendanceCorrectionDto } from '@sms/shared';
 
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { ScopeFilterService } from '../authorization/scope-filter.service';
+import { GeofenceService } from '../geofencing/geofence.service';
 
 @Injectable()
 export class AttendanceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly scopeFilter: ScopeFilterService,
+    private readonly geofence: GeofenceService,
+    private readonly audit: AuditService,
   ) {}
 
   async recordClockEvent(companyId: string, employeeId: string, dto: ClockEventDto) {
@@ -22,6 +27,75 @@ export class AttendanceService {
     });
     if (existingEvent) {
       return { status: 'deduplicated', eventId: existingEvent.id };
+    }
+
+    // Geofence enforcement (Hackathon Upgrade 2). Only clock-in is geofenced:
+    // clock-out, break events are not location-dependent. The employee must be
+    // assigned to a branch with an ACTIVE geofence for a fence to apply.
+    let geofenceResult: string | undefined;
+    if (dto.eventType === 'clock_in') {
+      const employee = await this.prisma.employee.findUnique({
+        where: { id: employeeId },
+        select: { branchId: true },
+      });
+      const branchId = employee?.branchId ?? null;
+      const fence = branchId
+        ? await this.prisma.geofence.findFirst({
+            where: { companyId, branchId, isActive: true },
+            include: { branch: { select: { name: true } } },
+          })
+        : null;
+
+      if (fence) {
+        this.assertClockInLocation(dto, fence.latitude, fence.longitude);
+
+        const evaluation = this.geofence.evaluate(
+          { latitude: dto.latitude as number, longitude: dto.longitude as number },
+          {
+            latitude: fence.latitude,
+            longitude: fence.longitude,
+            radiusMeters: fence.radiusMeters,
+          },
+        );
+
+        if (!evaluation.inside) {
+          // Do NOT create any attendance record/event for a denied clock-in.
+          await this.audit.record({
+            companyId,
+            action: 'attendance.clock_in.geofence_denied',
+            resource: 'attendance',
+            resourceId: employeeId,
+            after: {
+              branchId,
+              distanceMeters: evaluation.distanceMeters,
+              radiusMeters: evaluation.radiusMeters,
+            },
+          });
+          throw new BadRequestException({
+            message:
+              `You are outside the allowed clock-in area for ${fence.branch?.name ?? 'your branch'}. ` +
+              `You are ${Math.round(evaluation.distanceMeters)}m from the center (allowed within ${Math.round(evaluation.radiusMeters)}m).`,
+            errors: [
+              {
+                code: 'GEOFENCE_OUTSIDE',
+                message: 'Outside allowed clock-in area',
+                details: {
+                  branchId,
+                  branchName: fence.branch?.name,
+                  distanceMeters: evaluation.distanceMeters,
+                  radiusMeters: evaluation.radiusMeters,
+                },
+              },
+            ],
+          });
+        }
+
+        geofenceResult = JSON.stringify({
+          inside: true,
+          distanceMeters: evaluation.distanceMeters,
+          radiusMeters: evaluation.radiusMeters,
+        });
+      }
     }
 
     const occurredAt = new Date(dto.clientOccurredAt);
@@ -62,6 +136,7 @@ export class AttendanceService {
           idempotencyKey: dto.idempotencyKey,
           latitude: dto.latitude,
           longitude: dto.longitude,
+          geofenceResult,
           metadata: (dto.metadata as any) || {},
         },
       });
@@ -257,5 +332,65 @@ export class AttendanceService {
         corrections: true,
       },
     });
+  }
+
+  /**
+   * Self-scoped status endpoint: whether the caller's linked employee profile
+   * is assigned to a branch with an ACTIVE geofence. Lets the web client decide
+   * whether to request geolocation on clock-in without exposing other tenants'
+   * data or any fence coordinates beyond what the caller already knows.
+   */
+  async getMyGeofenceStatus(companyId: string, userId: string) {
+    const employee = await this.prisma.employee.findFirst({
+      where: { userId, companyId },
+      select: {
+        id: true,
+        branch: { select: { id: true, name: true } },
+      },
+    });
+
+    if (!employee?.branch?.id) {
+      return { applicable: false };
+    }
+
+    const fence = await this.prisma.geofence.findFirst({
+      where: { companyId, branchId: employee.branch.id, isActive: true },
+      select: { radiusMeters: true },
+    });
+
+    if (!fence) {
+      return {
+        applicable: false,
+        branchId: employee.branch.id,
+        branchName: employee.branch.name,
+      };
+    }
+
+    return {
+      applicable: true,
+      branchId: employee.branch.id,
+      branchName: employee.branch.name,
+      radiusMeters: fence.radiusMeters,
+    };
+  }
+
+  /**
+   * A geofenced branch requires raw coordinates; without them we cannot make
+   * an authoritative server-side decision, so we reject rather than accepting
+   * an unchecked clock-in.
+   */
+  private assertClockInLocation(dto: ClockEventDto, fenceLat: number, fenceLng: number) {
+    if (typeof dto.latitude !== 'number' || typeof dto.longitude !== 'number') {
+      throw new BadRequestException({
+        message: 'Location is required to clock in at this geofenced branch.',
+        errors: [
+          {
+            code: 'GEOFENCE_LOCATION_REQUIRED',
+            message: 'Your browser location could not be captured.',
+            details: { fenceLatitude: fenceLat, fenceLongitude: fenceLng },
+          },
+        ],
+      });
+    }
   }
 }

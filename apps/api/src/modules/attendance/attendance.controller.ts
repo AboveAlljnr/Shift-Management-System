@@ -45,6 +45,15 @@ export class AttendanceController {
     return this.attendanceService.recordClockEvent(companyId, employee.id, dto);
   }
 
+  @Get('me/geofence')
+  @ApiOperation({ summary: 'Self-scoped geofence status for the linked employee profile' })
+  async getMyGeofenceStatus(
+    @CompanyId() companyId: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.attendanceService.getMyGeofenceStatus(companyId, user.id);
+  }
+
   @Post('corrections')
   @RequiredPermission('attendance.correct')
   @ApiOperation({ summary: 'Manager correction of an attendance record with mandatory audit reason' })

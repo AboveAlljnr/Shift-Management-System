@@ -6,6 +6,17 @@ import { useMemo, useState, type FormEvent } from 'react';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/ui/page-header';
+import {
+  Modal,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
+  ModalTitle,
+  ModalDescription,
+  ModalClose,
+} from '@/components/ui/modal';
 import {
   createLeaveRequest,
   fetchLeaveBalances,
@@ -18,7 +29,7 @@ import { getAuthUser } from '@/lib/auth';
 import { format, parseISO } from 'date-fns';
 
 const inputClass =
-  'w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring';
+  'w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand transition';
 
 function dayDiff(start: string, end: string): number {
   const s = new Date(start);
@@ -106,18 +117,13 @@ export default function LeavePage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Leave</h1>
-          <p className="text-sm text-muted-foreground">
-            {isManager ? 'All leave requests' : 'Your leave and balances'}
-          </p>
-        </div>
-        <button
-          onClick={() => setShowRequest(true)}
-          className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
-        >
+        <PageHeader
+          title="Leave"
+          subtitle={isManager ? 'All leave requests' : 'Your leave and balances'}
+        />
+        <Button onClick={() => setShowRequest(true)}>
           Request leave
-        </button>
+        </Button>
       </div>
 
       {showBalances && balances && balances.length > 0 && (
@@ -125,15 +131,15 @@ export default function LeavePage() {
           {balances.map((b) => (
             <Card key={b.id}>
               <CardHeader>
-                <CardTitle className="text-sm">{b.leaveType.name}</CardTitle>
+                <CardTitle className="text-sm font-sans">{b.leaveType.name}</CardTitle>
                 <CardDescription>{b.year}</CardDescription>
               </CardHeader>
               <CardContent>
                 <p className="text-2xl font-bold">
                   {b.remainingDays}
-                  <span className="text-sm font-normal text-muted-foreground"> / {b.allocatedDays} days</span>
+                  <span className="text-sm font-normal text-slate-400"> / {b.allocatedDays} days</span>
                 </p>
-                <p className="text-xs text-muted-foreground">{b.usedDays} used</p>
+                <p className="text-xs text-slate-400">{b.usedDays} used</p>
               </CardContent>
             </Card>
           ))}
@@ -142,33 +148,33 @@ export default function LeavePage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>{isManager ? 'Requests' : 'My requests'}</CardTitle>
+          <CardTitle className="font-sans">{isManager ? 'Requests' : 'My requests'}</CardTitle>
           <CardDescription>Leave requests and their status</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           {requestList.length === 0 ? (
             <div className="px-6 py-10 text-center">
-              <UmbrellaOff className="mx-auto h-8 w-8 text-muted-foreground" />
-              <p className="mt-2 text-sm text-muted-foreground">
+              <UmbrellaOff className="mx-auto h-8 w-8 text-slate-400" />
+              <p className="mt-2 text-sm text-slate-500">
                 {isManager ? 'No leave requests yet.' : 'You have no leave requests yet.'}
               </p>
             </div>
           ) : (
-            <ul className="divide-y divide-border">
+            <ul className="divide-y divide-slate-100">
               {requestList.map((r) => (
                 <li key={r.id} className="px-6 py-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-sm font-medium">
+                      <p className="text-sm font-semibold text-slate-800">
                         {r.leaveType.name}
                         {isManager && ` · ${r.employee.firstName} ${r.employee.lastName}`}
                       </p>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-xs text-slate-400">
                         {format(parseISO(r.startDate as string), 'MMM d')} –{' '}
                         {format(parseISO(r.endDate as string), 'MMM d')} · {r.requestedDays} day
                         {r.requestedDays === 1 ? '' : 's'}
                       </p>
-                      {r.reason && <p className="mt-1 text-xs text-muted-foreground">{r.reason}</p>}
+                      {r.reason && <p className="mt-1 text-xs text-slate-500">{r.reason}</p>}
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       <StatusBadge status={r.status} />
@@ -177,14 +183,14 @@ export default function LeavePage() {
                           <button
                             onClick={() => review.mutate({ id: r.id, action: 'approve' })}
                             disabled={review.isPending}
-                            className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-60"
+                            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-60"
                           >
                             Approve
                           </button>
                           <button
                             onClick={() => review.mutate({ id: r.id, action: 'reject' })}
                             disabled={review.isPending}
-                            className="rounded-md border border-border px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted disabled:opacity-60"
+                            className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-500 transition-colors hover:bg-slate-50 disabled:opacity-60"
                           >
                             Reject
                           </button>
@@ -199,78 +205,68 @@ export default function LeavePage() {
         </CardContent>
       </Card>
 
-      {showRequest && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-lg border border-border bg-card shadow-lg">
-            <div className="border-b border-border p-5">
-              <h2 className="text-lg font-semibold">Request leave</h2>
-              <p className="text-sm text-muted-foreground">Submit a new time-off request</p>
+      <Modal open={showRequest} onOpenChange={setShowRequest}>
+        <ModalContent>
+          <ModalHeader>
+            <ModalTitle>Request leave</ModalTitle>
+            <ModalDescription>Submit a new time-off request</ModalDescription>
+          </ModalHeader>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-slate-700">
+                Leave type <span className="text-red-500">*</span>
+              </label>
+              <select value={form.leaveTypeId} onChange={(e) => setForm({ ...form, leaveTypeId: e.target.value })} className={inputClass}>
+                <option value="">Select…</option>
+                {(types ?? []).map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                    {t.isPaid ? ' (paid)' : ''}
+                  </option>
+                ))}
+              </select>
             </div>
-            <form onSubmit={handleSubmit} className="space-y-4 p-5">
+            <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">
-                  Leave type <span className="text-destructive">*</span>
+                <label className="text-sm font-medium text-slate-700">
+                  Start <span className="text-red-500">*</span>
                 </label>
-                <select value={form.leaveTypeId} onChange={(e) => setForm({ ...form, leaveTypeId: e.target.value })} className={inputClass}>
-                  <option value="">Select…</option>
-                  {(types ?? []).map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                      {t.isPaid ? ' (paid)' : ''}
-                    </option>
-                  ))}
-                </select>
+                <input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} className={inputClass} />
               </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">
-                    Start <span className="text-destructive">*</span>
-                  </label>
-                  <input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} className={inputClass} />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">
-                    End <span className="text-destructive">*</span>
-                  </label>
-                  <input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} className={inputClass} />
-                </div>
-              </div>
-              {form.startDate && form.endDate && form.endDate >= form.startDate && (
-                <p className="text-xs text-muted-foreground">
-                  {dayDiff(form.startDate, form.endDate)} day{dayDiff(form.startDate, form.endDate) === 1 ? '' : 's'} requested
-                </p>
-              )}
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">Reason</label>
-                <textarea value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} rows={2} className={inputClass} />
+                <label className="text-sm font-medium text-slate-700">
+                  End <span className="text-red-500">*</span>
+                </label>
+                <input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} className={inputClass} />
               </div>
+            </div>
+            {form.startDate && form.endDate && form.endDate >= form.startDate && (
+              <p className="text-xs text-slate-500">
+                {dayDiff(form.startDate, form.endDate)} day{dayDiff(form.startDate, form.endDate) === 1 ? '' : 's'} requested
+              </p>
+            )}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-slate-700">Reason</label>
+              <textarea value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} rows={2} className={inputClass} />
+            </div>
 
-              {formError && (
-                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  {formError}
-                </div>
-              )}
-
-              <div className="flex justify-end gap-3 border-t border-border pt-4">
-                <button
-                  type="button"
-                  onClick={() => setShowRequest(false)}
-                  className="rounded-md border border-border px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={create.isPending}
-                  className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-60"
-                >
-                  {create.isPending ? 'Submitting…' : 'Submit request'}
-                </button>
+            {formError && (
+              <div className="rounded-lg border border-red-300/40 bg-red-500/10 px-3 py-2 text-sm text-red-600">
+                {formError}
               </div>
-            </form>
-          </div>
-        </div>
-      )}
+            )}
+
+            <ModalFooter className="pt-2">
+              <ModalClose asChild>
+                <Button variant="secondary">Cancel</Button>
+              </ModalClose>
+              <Button type="submit" disabled={create.isPending}>
+                {create.isPending ? 'Submitting…' : 'Submit request'}
+              </Button>
+            </ModalFooter>
+          </form>
+        </ModalContent>
+      </Modal>
     </div>
   );
 }

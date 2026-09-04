@@ -103,6 +103,14 @@ export const AttendanceCorrectionSchema = z.object({
   reason: z.string().min(3),
 });
 
+export const BranchGeofenceSchema = z.object({
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+  radiusMeters: z.number().positive().max(50000),
+  name: z.string().min(1).max(120).optional(),
+  isActive: z.boolean().optional(),
+});
+
 // ---- Leave schemas ----
 export const CreateLeaveRequestSchema = z.object({
   leaveTypeId: z.string().uuid(),
@@ -172,6 +180,7 @@ export type ShiftConflictOverrideDto = z.infer<typeof ShiftConflictOverrideSchem
 export type PublishSchedulesDto = z.infer<typeof PublishSchedulesSchema>;
 export type ClockEventDto = z.infer<typeof ClockEventSchema>;
 export type AttendanceCorrectionDto = z.infer<typeof AttendanceCorrectionSchema>;
+export type BranchGeofenceDto = z.infer<typeof BranchGeofenceSchema>;
 export type CreateLeaveRequestDto = z.infer<typeof CreateLeaveRequestSchema>;
 export type ReviewLeaveDto = z.infer<typeof ReviewLeaveSchema>;
 export type RequestOptimizationDto = z.infer<typeof RequestOptimizationSchema>;
