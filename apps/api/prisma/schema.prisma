@@ -143,6 +143,13 @@ enum AttendanceEventSource {
   offline_sync
 }
 
+enum PresenceVerificationStatus {
+  PENDING
+  VERIFIED
+  OUTSIDE_GEOFENCE
+  MISSED
+}
+
 enum LeaveStatus {
   pending
   approved
@@ -236,6 +243,7 @@ model Company {
   optimizationRequests    OptimizationRequest[]
   attendanceRecords       AttendanceRecord[]
   attendanceEvents        AttendanceEvent[]
+  presenceVerifications   PresenceVerification[]
   leaveTypes              LeaveType[]
   leaveBalances           LeaveBalance[]
   leaveRequests           LeaveRequest[]
@@ -355,9 +363,10 @@ model Branch {
   employees      Employee[]
   shifts         Shift[]
   shiftTemplates ShiftTemplate[]
-  geofences      Geofence[]
-  holidays       Holiday[]
-  schedules      Schedule[]
+  geofences        Geofence[]
+  holidays         Holiday[]
+  schedules        Schedule[]
+  presenceVerifications PresenceVerification[]
 
   @@unique([companyId, code])
   @@map("branches")
@@ -621,6 +630,7 @@ model Employee {
   shiftConflictOverrides ShiftConflictOverride[]
   attendanceRecords      AttendanceRecord[]
   attendanceEvents       AttendanceEvent[]
+  presenceVerifications  PresenceVerification[]
   breaks                 Break[]
   documents              Document[]
   activityAssignments    ActivityAssignment[]
@@ -1020,6 +1030,7 @@ model AttendanceRecord {
   events          AttendanceEvent[]
   breaks          Break[]
   corrections     AttendanceCorrection[]
+  presenceVerifications PresenceVerification[]
 
   @@unique([employeeId, workDate])
   @@index([companyId, workDate])
@@ -1045,10 +1056,40 @@ model AttendanceEvent {
   attendanceRecord AttendanceRecord @relation(fields: [attendanceRecordId], references: [id], onDelete: Cascade)
   company          Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   employee         Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  presenceVerification PresenceVerification?
 
   @@index([employeeId, clientOccurredAt])
   @@index([companyId, clientOccurredAt])
   @@map("attendance_events")
+}
+
+model PresenceVerification {
+  id                    String                     @id @default(uuid())
+  companyId             String
+  employeeId            String
+  branchId              String?
+  attendanceRecordId    String
+  attendanceEventId     String                     @unique
+  dueAt                 DateTime
+  verifiedAt            DateTime?
+  status                PresenceVerificationStatus @default(PENDING)
+  latitude              Float?
+  longitude             Float?
+  distanceMeters        Float?
+  geofenceRadiusMeters  Float?
+  createdAt             DateTime                   @default(now())
+  updatedAt             DateTime                   @updatedAt
+
+  company            Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee           Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  branch             Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  attendanceRecord   AttendanceRecord @relation(fields: [attendanceRecordId], references: [id], onDelete: Cascade)
+  attendanceEvent    AttendanceEvent  @relation(fields: [attendanceEventId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@index([companyId, employeeId, status])
+  @@index([employeeId, dueAt])
+  @@map("presence_verifications")
 }
 
 model Break {

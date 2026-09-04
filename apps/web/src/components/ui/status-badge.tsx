@@ -7,6 +7,9 @@ const STYLES: Record<string, string> = {
   review: 'bg-muted text-foreground',
   invited: 'bg-muted text-muted-foreground',
   pending: 'bg-amber-100 text-amber-800',
+  verified: 'bg-emerald-100 text-emerald-800',
+  outside_geofence: 'bg-amber-100 text-amber-800',
+  missed: 'bg-rose-100 text-rose-800',
   // Active / success
   active: 'bg-emerald-100 text-emerald-800',
   present: 'bg-emerald-100 text-emerald-800',

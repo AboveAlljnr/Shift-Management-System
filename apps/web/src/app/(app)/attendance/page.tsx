@@ -1,7 +1,7 @@
 ﻿'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { ClipboardCheck, Users, Clock, AlertTriangle } from 'lucide-react';
+import { ClipboardCheck, Users, Clock, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -15,7 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { fetchDailyAttendance, fetchEmployeeAttendance, fetchMyEmployee } from '@/lib/api/queries';
+import { fetchDailyAttendance, fetchEmployeeAttendance, fetchMyEmployee, fetchPresenceVerifications } from '@/lib/api/queries';
 import { getAuthUser } from '@/lib/auth';
 import { formatTime } from '@/lib/utils';
 import { format, parseISO } from 'date-fns';
@@ -48,6 +48,16 @@ export default function AttendancePage() {
     enabled: !!me?.id && !isManager,
   });
 
+  const { data: presenceVerifications } = useQuery({
+    queryKey: ['presenceVerifications'],
+    queryFn: () => fetchPresenceVerifications(),
+    enabled: isManager,
+    staleTime: 30 * 1000,
+  });
+
+  const presPresence = presenceVerifications ?? [];
+  const presenceExceptions = presPresence.filter((p) => p.status === 'MISSED' || p.status === 'OUTSIDE_GEOFENCE');
+
   const today = selectedDate;
   const todayRecords = myHistory ?? [];
 
@@ -79,6 +89,7 @@ export default function AttendancePage() {
         </div>
 
         {isManager ? (
+          <>
           <Card>
             <CardHeader>
               <CardTitle className="text-base font-bold text-slate-900 font-sans">Daily attendance — {format(parseISO(today), 'MMM d, yyyy')}</CardTitle>
@@ -138,6 +149,58 @@ export default function AttendancePage() {
               )}
             </CardContent>
           </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base font-bold text-slate-900 font-sans">
+                Presence verification exceptions
+              </CardTitle>
+              <CardDescription>
+                {presenceExceptions.length > 0
+                  ? `${presenceExceptions.length} need attention`
+                  : 'No missed or outside-geofence verifications'}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              {presPresence.length === 0 ? (
+                <div className="px-6 py-10 text-center">
+                  <ShieldCheck className="mx-auto h-8 w-8 text-slate-400" />
+                  <p className="mt-2 text-sm text-slate-500">No presence verifications yet.</p>
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Employee</TableHead>
+                      <TableHead>Branch</TableHead>
+                      <TableHead className="hidden sm:table-cell">Due</TableHead>
+                      <TableHead className="hidden sm:table-cell">Verified at</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {presPresence.map((pv) => (
+                      <TableRow key={pv.id}>
+                        <TableCell>
+                          <p className="text-sm font-semibold text-slate-800">{pv.employeeName}</p>
+                          <p className="text-xs text-slate-400">{pv.employeeNumber}</p>
+                        </TableCell>
+                        <TableCell className="text-sm text-slate-600">{pv.branchName ?? '—'}</TableCell>
+                        <TableCell className="hidden sm:table-cell text-sm text-slate-600 font-mono">
+                          {pv.dueAt ? formatTime(pv.dueAt) : '—'}
+                        </TableCell>
+                        <TableCell className="hidden sm:table-cell text-sm text-slate-600 font-mono">
+                          {pv.verifiedAt ? formatTime(pv.verifiedAt) : '—'}
+                        </TableCell>
+                        <TableCell><StatusBadge status={pv.status} /></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+          </>
         ) : (
           <Card>
             <CardHeader>

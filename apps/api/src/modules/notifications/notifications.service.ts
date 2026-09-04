@@ -46,4 +46,33 @@ export class NotificationsService {
       },
     });
   }
+
+  /**
+   * Create an in-app notification row for a user. Used for in-app reminders and
+   * event acknowledgements; this is never a push notification.
+   */
+  async createForUser(input: {
+    companyId: string;
+    recipientUserId: string;
+    eventType: string;
+    title: string;
+    body: string;
+    relatedEntityType?: string;
+    relatedEntityId?: string;
+  }) {
+    return this.prisma.notification.create({
+      data: {
+        companyId: input.companyId,
+        recipientId: input.recipientUserId,
+        channel: 'in_app',
+        eventType: input.eventType,
+        title: input.title,
+        body: input.body,
+        relatedEntityType: input.relatedEntityType ?? null,
+        relatedEntityId: input.relatedEntityId ?? null,
+        deliveryStatus: 'delivered',
+        deliveredAt: new Date(),
+      },
+    });
+  }
 }

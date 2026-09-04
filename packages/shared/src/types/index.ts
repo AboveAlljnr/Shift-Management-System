@@ -372,6 +372,36 @@ export interface GeofenceEnforcementConfig {
   allowMissingLocation?: boolean;
 }
 
+// ---- Presence verification (post clock-in check, ADR-009) ----
+export type PresenceVerificationStatus = 'PENDING' | 'VERIFIED' | 'OUTSIDE_GEOFENCE' | 'MISSED';
+
+export interface PresenceVerificationConfig {
+  /** Whether a presence verification record is created after each clock-in. */
+  enabled: boolean;
+  /** Minutes after clock-in before the verification is due. */
+  verifyAfterMinutes: number;
+  /** Extra minutes past dueAt before an unanswered PENDING verification becomes MISSED. */
+  graceMinutes: number;
+}
+
+export interface PresenceVerification {
+  id: string;
+  companyId: string;
+  employeeId: string;
+  branchId: string | null;
+  attendanceRecordId: string;
+  attendanceEventId: string;
+  dueAt: string;
+  verifiedAt: string | null;
+  status: PresenceVerificationStatus;
+  latitude: number | null;
+  longitude: number | null;
+  distanceMeters: number | null;
+  geofenceRadiusMeters: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ---- Leave ----
 export type LeaveStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 

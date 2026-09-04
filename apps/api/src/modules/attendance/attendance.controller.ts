@@ -9,11 +9,13 @@ import {
 } from '@nestjs/common';
 import { ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { AttendanceCorrectionSchema, ClockEventSchema, UpdateGeofenceEnforcementConfigSchema } from '@sms/shared';
+import { AttendanceCorrectionSchema, ClockEventSchema, UpdateGeofenceEnforcementConfigSchema, UpdatePresenceVerificationConfigSchema, PresenceVerifySchema } from '@sms/shared';
 import type {
   ClockEventDto,
   AttendanceCorrectionDto,
   UpdateGeofenceEnforcementConfigDto,
+  UpdatePresenceVerificationConfigDto,
+  PresenceVerifyDto,
   User,
 } from '@sms/shared';
 
@@ -75,6 +77,60 @@ export class AttendanceController {
     @Body(new ZodValidationPipe(UpdateGeofenceEnforcementConfigSchema.partial())) dto: Partial<UpdateGeofenceEnforcementConfigDto>,
   ) {
     return this.attendanceService.updateGeofenceEnforcementConfig(companyId, dto);
+  }
+
+  @Get('presence-config')
+  @RequiredPermission('attendance.read')
+  @ApiOperation({ summary: 'Get the effective presence verification configuration' })
+  async getPresenceConfig(@CompanyId() companyId: string) {
+    return this.attendanceService.getPresenceVerificationConfig(companyId);
+  }
+
+  @Patch('presence-config')
+  @RequiredPermission('attendance.override')
+  @ApiOperation({ summary: 'Update presence verification settings (post clock-in location check)' })
+  async updatePresenceConfig(
+    @CompanyId() companyId: string,
+    @Body(new ZodValidationPipe(UpdatePresenceVerificationConfigSchema.partial())) dto: Partial<UpdatePresenceVerificationConfigDto>,
+  ) {
+    return this.attendanceService.updatePresenceVerificationConfig(companyId, dto);
+  }
+
+  @Get('presence-verifications/mine')
+  @ApiOperation({ summary: 'Self-scoped presence verification state for the linked employee profile' })
+  async getMyPresenceVerification(
+    @CompanyId() companyId: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.attendanceService.getMyPresenceVerification(companyId, user.id);
+  }
+
+  @Post('presence-verifications/:id/verify')
+  @ApiOperation({ summary: 'Submit location to prove presence; server derives the verdict (VERIFIED / OUTSIDE_GEOFENCE)' })
+  async verifyPresence(
+    @CompanyId() companyId: string,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(PresenceVerifySchema)) dto: PresenceVerifyDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.attendanceService.verifyPresence(companyId, id, dto, user.id);
+  }
+
+  @Get('presence-verifications')
+  @RequiredPermission('attendance.read')
+  @ApiOperation({ summary: 'Manager list of presence verifications (exceptions prioritized)' })
+  async listPresenceVerifications(
+    @CompanyId() companyId: string,
+    @Query('status') status?: string,
+    @CurrentUser() user?: AuthUser,
+  ) {
+    const statuses = status
+      ? status
+          .split(',')
+          .map((s) => s.trim().toUpperCase())
+          .filter(Boolean)
+      : undefined;
+    return this.attendanceService.listPresenceVerifications(companyId, user?.membershipId ?? '', statuses);
   }
 
   @Post('corrections')

@@ -11,9 +11,12 @@ import {
   fetchEmployeeAttendance,
   fetchMyEmployee,
   fetchMyGeofenceStatus,
+  fetchMyPresenceVerification,
   fetchMyShifts,
   recordClockEvent,
+  verifyPresence,
   type MyGeofenceStatus,
+  type MyPresenceVerification,
 } from '@/lib/api/queries';
 import { cn, formatTime } from '@/lib/utils';
 import { format } from 'date-fns';
@@ -96,9 +99,50 @@ export default function MobilePage() {
     staleTime: 60 * 1000,
   });
 
+  const { data: presence } = useQuery<MyPresenceVerification>({
+    queryKey: ['myPresenceVerification'],
+    queryFn: fetchMyPresenceVerification,
+    refetchInterval: 60 * 1000,
+  });
+  const [verifying, setVerifying] = useState(false);
+  const [presenceNotice, setPresenceNotice] = useState<string | null>(null);
+
   const todaysShift = myShifts?.find((s) => s.startAt.slice(0, 10) === todayISO);
   const todaysAttendance = attendance?.find((a) => a.workDate.slice(0, 10) === todayISO);
   const isClockedIn = !!todaysAttendance?.effectiveClockIn && !todaysAttendance?.effectiveClockOut;
+
+  const presenceVerification = presence?.verification ?? null;
+  const presenceDue =
+    presenceVerification?.status === 'PENDING' &&
+    new Date(presenceVerification.dueAt).getTime() <= Date.now();
+
+  const verifyMutation = useMutation({
+    mutationFn: (coords: { latitude: number; longitude: number }) =>
+      verifyPresence(presenceVerification?.id as string, coords),
+    onSuccess: () => {
+      setPresenceNotice('Presence check submitted.');
+      queryClient.invalidateQueries({ queryKey: ['myPresenceVerification'] });
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    },
+    onError: (e) => setPresenceNotice(extractClockError(e)),
+    onSettled: () => setVerifying(false),
+  });
+
+  const handleVerifyPresence = async () => {
+    if (!presenceVerification) return;
+    setPresenceNotice(null);
+    setVerifying(true);
+    try {
+      const pos = await getCurrentPosition();
+      verifyMutation.mutate({
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+      });
+    } catch (locErr) {
+      setVerifying(false);
+      setPresenceNotice(getLocationErrorMessage(locErr));
+    }
+  };
 
   const clockMutation = useMutation({
     mutationFn: (args: {
@@ -266,6 +310,91 @@ export default function MobilePage() {
                   </p>
                 </div>
               </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Presence verification */}
+        {presence?.applicable && presenceVerification && (
+          <Card
+            className={cn(
+              'border',
+              presenceDue
+                ? 'border-brand bg-brand/5'
+                : presenceVerification.status === 'OUTSIDE_GEOFENCE' || presenceVerification.status === 'MISSED'
+                  ? 'border-red-200'
+                  : presenceVerification.status === 'VERIFIED'
+                    ? 'border-emerald-200'
+                    : 'border-slate-200/80',
+            )}
+          >
+            <CardContent className="p-4">
+              <div className="flex items-center gap-3">
+                <div
+                  className={cn(
+                    'flex h-10 w-10 items-center justify-center rounded-full',
+                    presenceVerification.status === 'VERIFIED'
+                      ? 'bg-emerald-100'
+                      : presenceVerification.status === 'OUTSIDE_GEOFENCE' || presenceVerification.status === 'MISSED'
+                        ? 'bg-red-100'
+                        : presenceDue
+                          ? 'bg-brand/10'
+                          : 'bg-slate-100',
+                  )}
+                >
+                  {presenceVerification.status === 'VERIFIED' ? (
+                    <CheckCircle2 size={20} className="text-emerald-600" />
+                  ) : presenceVerification.status === 'OUTSIDE_GEOFENCE' || presenceVerification.status === 'MISSED' ? (
+                    <AlertTriangle size={20} className="text-red-500" />
+                  ) : (
+                    <MapPin size={20} className="text-brand" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    Presence Verification
+                  </p>
+                  <p className="text-sm font-semibold text-slate-800 mt-0.5">
+                    {presenceVerification.status === 'VERIFIED'
+                      ? `Verified at ${presenceVerification.verifiedAt ? formatTime(presenceVerification.verifiedAt) : formatTime(presenceVerification.dueAt)}`
+                      : presenceVerification.status === 'OUTSIDE_GEOFENCE'
+                        ? 'Outside geofence — flagged for review'
+                        : presenceVerification.status === 'MISSED'
+                          ? 'Missed — presence check not completed'
+                          : presenceDue
+                            ? 'Presence Verification Required'
+                            : `Presence check scheduled for ${formatTime(presenceVerification.dueAt)}`}
+                  </p>
+                  {presenceVerification.status === 'PENDING' && (
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      {presenceDue
+                        ? 'In-app reminder: verify your presence now.'
+                        : 'Location is requested only when you choose Verify Presence.'}
+                    </p>
+                  )}
+                  {presenceVerification.status === 'OUTSIDE_GEOFENCE' && (
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Your location was outside the branch area at the scheduled time.
+                    </p>
+                  )}
+                </div>
+                {presenceDue && (
+                  <Button
+                    size="sm"
+                    className="shrink-0"
+                    disabled={verifying || verifyMutation.isPending}
+                    onClick={handleVerifyPresence}
+                  >
+                    {verifying ? 'Locating…' : 'Verify Presence'}
+                  </Button>
+                )}
+              </div>
+              {presenceNotice && (
+                <p className="mt-2 flex items-center gap-1 text-xs text-red-600">
+                  <AlertTriangle size={13} />
+                  {presenceNotice}
+                </p>
+              )}
             </CardContent>
           </Card>
         )}

@@ -172,6 +172,31 @@ export const UpdateGeofenceEnforcementConfigSchema = z.object({
   allowMissingLocation: z.boolean().optional(),
 });
 
+// ---- Presence verification settings (configurable) ----
+export const PresenceVerificationStatusEnum = z.enum([
+  'PENDING',
+  'VERIFIED',
+  'OUTSIDE_GEOFENCE',
+  'MISSED',
+]);
+
+export const PresenceVerificationConfigSchema = z.object({
+  enabled: z.boolean(),
+  verifyAfterMinutes: z.number().int().positive().max(1440),
+  graceMinutes: z.number().int().nonnegative().max(1440),
+});
+
+export const UpdatePresenceVerificationConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  verifyAfterMinutes: z.number().int().positive().max(1440).optional(),
+  graceMinutes: z.number().int().nonnegative().max(1440).optional(),
+});
+
+export const PresenceVerifySchema = z.object({
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+});
+
 // ---- Leave schemas ----
 export const CreateLeaveRequestSchema = z.object({
   leaveTypeId: z.string().uuid(),
@@ -257,3 +282,9 @@ export type PaginationQueryDto = z.infer<typeof PaginationQuerySchema>;
 export type GeofenceEnforcementConfigDto = z.infer<typeof GeofenceEnforcementConfigSchema>;
 
 export type UpdateGeofenceEnforcementConfigDto = z.infer<typeof UpdateGeofenceEnforcementConfigSchema>;
+
+export type PresenceVerificationConfigDto = z.infer<typeof PresenceVerificationConfigSchema>;
+
+export type UpdatePresenceVerificationConfigDto = z.infer<typeof UpdatePresenceVerificationConfigSchema>;
+
+export type PresenceVerifyDto = z.infer<typeof PresenceVerifySchema>;

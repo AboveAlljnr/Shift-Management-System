@@ -9,6 +9,8 @@ import type {
   GeofenceEnforcementConfig,
   LeaveRequest,
   LeaveType,
+  PresenceVerificationConfig,
+  PresenceVerificationStatus,
   Schedule,
   ScheduleVersion,
   Shift,
@@ -446,6 +448,64 @@ export function updateGeofenceConfig(
   dto: Partial<GeofenceEnforcementConfig>,
 ): Promise<GeofenceEnforcementConfig> {
   return patchData<GeofenceEnforcementConfig>('/attendance/geofence-config', dto);
+}
+
+// ---- Presence verification (post clock-in check) ----
+
+export interface MyPresenceVerification {
+  applicable: boolean;
+  config: PresenceVerificationConfig;
+  verification: {
+    id: string;
+    status: PresenceVerificationStatus;
+    dueAt: string;
+    verifiedAt: string | null;
+    branchId: string | null;
+    branchName: string | null;
+    distanceMeters: number | null;
+    geofenceRadiusMeters: number | null;
+  } | null;
+}
+
+export interface PresenceVerificationListItem {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  employeeNumber: string;
+  branchId: string | null;
+  branchName: string | null;
+  dueAt: string;
+  verifiedAt: string | null;
+  status: PresenceVerificationStatus;
+  distanceMeters: number | null;
+  geofenceRadiusMeters: number | null;
+}
+
+export function fetchPresenceConfig(): Promise<PresenceVerificationConfig> {
+  return getData<PresenceVerificationConfig>('/attendance/presence-config');
+}
+
+export function updatePresenceConfig(
+  dto: Partial<PresenceVerificationConfig>,
+): Promise<PresenceVerificationConfig> {
+  return patchData<PresenceVerificationConfig>('/attendance/presence-config', dto);
+}
+
+export function fetchMyPresenceVerification(): Promise<MyPresenceVerification> {
+  return getData<MyPresenceVerification>('/attendance/presence-verifications/mine');
+}
+
+export function verifyPresence(
+  id: string,
+  coordinates: { latitude: number; longitude: number },
+): Promise<{ id: string; status: PresenceVerificationStatus; inside: boolean }> {
+  return postData(`/attendance/presence-verifications/${id}/verify`, coordinates);
+}
+
+export function fetchPresenceVerifications(statuses?: PresenceVerificationStatus[]): Promise<PresenceVerificationListItem[]> {
+  return getData<PresenceVerificationListItem[]>('/attendance/presence-verifications', {
+    ...(statuses && statuses.length ? { status: statuses.join(',') } : {}),
+  });
 }
 
 export function fetchDailyAttendance(date: string): Promise<AttendanceRecordDetail[]> {

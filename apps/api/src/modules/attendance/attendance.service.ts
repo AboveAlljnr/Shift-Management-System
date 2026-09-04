@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -7,6 +9,9 @@ import type {
   ClockEventDto,
   AttendanceCorrectionDto,
   GeofenceEnforcementConfigDto,
+  PresenceVerificationConfig,
+  PresenceVerifyDto,
+  UpdatePresenceVerificationConfigDto,
 } from '@sms/shared';
 
 type GeofenceEnforcementConfig = {
@@ -18,6 +23,7 @@ import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { ScopeFilterService } from '../authorization/scope-filter.service';
 import { GeofenceService } from '../geofencing/geofence.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class AttendanceService {
@@ -26,6 +32,7 @@ export class AttendanceService {
     private readonly scopeFilter: ScopeFilterService,
     private readonly geofence: GeofenceService,
     private readonly audit: AuditService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async recordClockEvent(companyId: string, employeeId: string, dto: ClockEventDto) {
@@ -147,6 +154,11 @@ export class AttendanceService {
     const occurredAt = new Date(dto.clientOccurredAt);
     const workDate = new Date(occurredAt.toISOString().slice(0, 10));
 
+    // Presence verification (ADR-009): independent of geofence enforcement. When
+    // enabled, each successful clock-in schedules exactly one PENDING verification
+    // due verifyAfterMinutes after the clock-in, regardless of the geofence mode.
+    const presenceConfig = await this.getPresenceVerificationConfig(companyId);
+
     return this.prisma.$transaction(async (tx) => {
       // 2. Find or create daily AttendanceRecord
       let record = await tx.attendanceRecord.findUnique({
@@ -194,6 +206,27 @@ export class AttendanceService {
 
       // 4. Normalize daily AttendanceRecord state from event
       if (dto.eventType === 'clock_in') {
+        // 4a. Presence verification (ADR-009): exactly one PENDING record per
+        //     clock-in, due verifyAfterMinutes after the event. Applies whether
+        //     geofence enforcement is strict, warning, or off.
+        if (presenceConfig.enabled) {
+          const linkedEmployee = await tx.employee.findUnique({
+            where: { id: employeeId },
+            select: { branchId: true, userId: true },
+          });
+          await tx.presenceVerification.create({
+            data: {
+              companyId,
+              employeeId,
+              branchId: linkedEmployee?.branchId ?? null,
+              attendanceRecordId: record.id,
+              attendanceEventId: event.id,
+              dueAt: new Date(occurredAt.getTime() + presenceConfig.verifyAfterMinutes * 60_000),
+              status: 'PENDING',
+            },
+          });
+        }
+
         if (!record.effectiveClockIn || occurredAt < record.effectiveClockIn) {
           await tx.attendanceRecord.update({
             where: { id: record.id },
@@ -476,6 +509,367 @@ export class AttendanceService {
     });
 
     return this.getGeofenceEnforcementConfig(companyId);
+  }
+
+  // ============================================================================
+  // Presence verification (ADR-009): a post clock-in location check. The client
+  // submits raw coordinates; every derivation (which employee/branch/fence, the
+  // inside/outside result, distances) is computed server-side and never trusted
+  // from the client.
+  // ============================================================================
+
+  /**
+   * Effective presence verification configuration. Disabled unless a tenant
+   * explicitly opts in. Defaults keep the hackathon-friendly 1-minute minimum
+   * possible (verifyAfterMinutes >= 1) while production remains opt-in.
+   */
+  async getPresenceVerificationConfig(companyId: string): Promise<PresenceVerificationConfig> {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { settings: true },
+    });
+    const settings = (company?.settings ?? {}) as Record<string, any>;
+    const pv = (settings.presenceVerification ?? {}) as Partial<PresenceVerificationConfig>;
+    return {
+      enabled: pv.enabled ?? false,
+      verifyAfterMinutes: pv.verifyAfterMinutes ?? 240,
+      graceMinutes: pv.graceMinutes ?? 15,
+    };
+  }
+
+  /** Persist only the settings.presenceVerification namespace (merge-safe). */
+  async updatePresenceVerificationConfig(
+    companyId: string,
+    dto: Partial<UpdatePresenceVerificationConfigDto>,
+  ): Promise<PresenceVerificationConfig> {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { settings: true },
+    });
+    const settings = (company?.settings ?? {}) as Record<string, any>;
+    const current = (settings.presenceVerification ?? {}) as Record<string, any>;
+
+    settings.presenceVerification = {
+      enabled: dto.enabled ?? current.enabled ?? false,
+      verifyAfterMinutes: dto.verifyAfterMinutes ?? current.verifyAfterMinutes ?? 240,
+      graceMinutes: dto.graceMinutes ?? current.graceMinutes ?? 15,
+    };
+
+    await this.prisma.company.update({
+      where: { id: companyId },
+      data: { settings },
+    });
+
+    await this.audit.record({
+      companyId,
+      action: 'attendance.presence_config.updated',
+      resource: 'attendance',
+      resourceId: companyId,
+      before: { presenceVerification: current },
+      after: { presenceVerification: settings.presenceVerification },
+    });
+
+    return this.getPresenceVerificationConfig(companyId);
+  }
+
+  /**
+   * Lazy, server-authoritative MISSED reconciliation: any PENDING verification
+   * past (dueAt + graceMinutes) is marked MISSED and audited. Runs on the
+   * relevant reads so the UI always sees the current authoritative state.
+   */
+  private async reconcileExpiredPresenceVerifications(
+    companyId: string,
+    config?: PresenceVerificationConfig,
+    now = new Date(),
+  ): Promise<void> {
+    const cfg = config ?? (await this.getPresenceVerificationConfig(companyId));
+    if (!cfg.enabled) return;
+
+    const cutoff = new Date(now.getTime() - cfg.graceMinutes * 60_000);
+    const expired = await this.prisma.presenceVerification.findMany({
+      where: { companyId, status: 'PENDING', dueAt: { lt: cutoff } },
+      select: {
+        id: true,
+        branchId: true,
+        employee: { select: { userId: true, firstName: true, lastName: true } },
+      },
+    });
+
+    for (const pv of expired) {
+      await this.prisma.presenceVerification.update({
+        where: { id: pv.id },
+        data: { status: 'MISSED', verifiedAt: now },
+      });
+      await this.audit.record({
+        companyId,
+        action: 'attendance.presence_verification.missed',
+        resource: 'attendance.presence_verification',
+        resourceId: pv.id,
+        after: { branchId: pv.branchId, status: 'MISSED' },
+      });
+      if (pv.employee?.userId) {
+        await this.notifications.createForUser({
+          companyId,
+          recipientUserId: pv.employee.userId,
+          eventType: 'presence_verification.missed',
+          title: 'Presence verification missed',
+          body: `Your presence check was marked missed because it was not completed in time. Please speak with your manager.`,
+          relatedEntityType: 'presence_verification',
+          relatedEntityId: pv.id,
+        });
+      }
+    }
+  }
+
+  /**
+   * Self-scoped current presence verification for the caller's linked employee
+   * profile. Returns the most recent verification plus whether the feature
+   * applies, so the mobile client can render scheduled/due/resolved states.
+   */
+  async getMyPresenceVerification(companyId: string, userId: string) {
+    const config = await this.getPresenceVerificationConfig(companyId);
+    const employee = await this.prisma.employee.findFirst({
+      where: { userId, companyId },
+      select: { id: true },
+    });
+    if (!employee) {
+      return { applicable: false, config, verification: null };
+    }
+
+    await this.reconcileExpiredPresenceVerifications(companyId, config);
+
+    const verification = await this.prisma.presenceVerification.findFirst({
+      where: { companyId, employeeId: employee.id },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        branch: { select: { id: true, name: true } },
+      },
+    });
+
+    return {
+      applicable: config.enabled,
+      config,
+      verification: verification
+        ? {
+            id: verification.id,
+            status: verification.status,
+            dueAt: verification.dueAt,
+            verifiedAt: verification.verifiedAt,
+            branchId: verification.branchId,
+            branchName: verification.branch?.name ?? null,
+            distanceMeters: verification.distanceMeters,
+            geofenceRadiusMeters: verification.geofenceRadiusMeters,
+            longitude: verification.longitude,
+            latitude: verification.latitude,
+          }
+        : null,
+    };
+  }
+
+  /**
+   * Manager list of presence verifications, scoped by the caller's scope and the
+   * company tenant. Out-of-fence and missed exceptions are surfaced first.
+   */
+  async listPresenceVerifications(
+    companyId: string,
+    membershipId?: string,
+    statuses?: string[],
+    now = new Date(),
+  ) {
+    await this.reconcileExpiredPresenceVerifications(companyId, undefined, now);
+
+    const scopeWhere = membershipId
+      ? await this.scopeFilter.employeeRelationWhere(membershipId, companyId)
+      : undefined;
+
+    const where: Record<string, any> = { companyId };
+    if (statuses && statuses.length > 0) {
+      where.status = { in: statuses };
+    }
+    if (scopeWhere) {
+      where.employee = scopeWhere.employee;
+    }
+
+    const rows = await this.prisma.presenceVerification.findMany({
+      where,
+      orderBy: { dueAt: 'desc' },
+      take: 200,
+      include: {
+        employee: { select: { id: true, firstName: true, lastName: true, employeeNumber: true } },
+        branch: { select: { id: true, name: true } },
+      },
+    });
+
+    const priority: Record<string, number> = {
+      MISSED: 0,
+      OUTSIDE_GEOFENCE: 1,
+      PENDING: 2,
+      VERIFIED: 3,
+    };
+    rows.sort(
+      (a, b) =>
+        (priority[a.status] ?? 9) - (priority[b.status] ?? 9) ||
+        b.dueAt.getTime() - a.dueAt.getTime(),
+    );
+
+    return rows.map((r) => ({
+      id: r.id,
+      employeeId: r.employeeId,
+      employeeName: `${r.employee.firstName} ${r.employee.lastName}`,
+      employeeNumber: r.employee.employeeNumber,
+      branchId: r.branchId,
+      branchName: r.branch?.name ?? null,
+      dueAt: r.dueAt,
+      verifiedAt: r.verifiedAt,
+      status: r.status,
+      distanceMeters: r.distanceMeters,
+      geofenceRadiusMeters: r.geofenceRadiusMeters,
+    }));
+  }
+
+  /**
+   * Employee action: prove presence at the scheduled time by supplying ONLY
+   * coordinates. The server derives ownership, tenant, branch, the active fence
+   * and the inside/outside verdict. Geofence enforcement mode never changes the
+   * result; this is a factual comparison against the branch's active fence.
+   */
+  async verifyPresence(
+    companyId: string,
+    verificationId: string,
+    dto: PresenceVerifyDto,
+    userId: string,
+    now = new Date(),
+  ) {
+    const config = await this.getPresenceVerificationConfig(companyId);
+    if (!config.enabled) {
+      throw new BadRequestException({
+        message: 'Presence verification is not enabled for this company.',
+        errors: [{ code: 'PRESENCE_VERIFICATION_DISABLED' }],
+      });
+    }
+
+    const verification = await this.prisma.presenceVerification.findUnique({
+      where: { id: verificationId },
+      include: {
+        employee: { select: { userId: true, firstName: true, lastName: true, branchId: true } },
+      },
+    });
+
+    if (!verification || verification.companyId !== companyId) {
+      throw new NotFoundException('Presence verification not found');
+    }
+    if (verification.employee.userId !== userId) {
+      throw new ForbiddenException('You are not authorized to verify this presence check');
+    }
+
+    // Lapsed and still unanswered -> MISSED (server-authoritative).
+    const cutoff = new Date(now.getTime() - config.graceMinutes * 60_000);
+    if (verification.status === 'PENDING' && verification.dueAt < cutoff) {
+      await this.prisma.presenceVerification.update({
+        where: { id: verification.id },
+        data: { status: 'MISSED', verifiedAt: now },
+      });
+      await this.audit.record({
+        companyId,
+        action: 'attendance.presence_verification.missed',
+        resource: 'attendance.presence_verification',
+        resourceId: verification.id,
+        after: { branchId: verification.branchId, status: 'MISSED' },
+      });
+      throw new ConflictException('The presence verification period has lapsed');
+    }
+
+    // Idempotent re-submission of an already resolved verification.
+    if (verification.status !== 'PENDING') {
+      return this.serializeVerified(verification);
+    }
+
+    if (!Number.isFinite(dto.latitude) || !Number.isFinite(dto.longitude)) {
+      throw new BadRequestException({
+        message: 'Valid coordinates are required to verify presence.',
+        errors: [{ code: 'INVALID_COORDINATES' }],
+      });
+    }
+
+    const branchId = verification.branchId ?? verification.employee.branchId;
+    if (!branchId) {
+      throw new BadRequestException({
+        message: 'No branch is assigned to verify presence against.',
+        errors: [{ code: 'GEOFENCE_UNAVAILABLE', message: 'No branch geofence is configured.' }],
+      });
+    }
+
+    const fence = await this.prisma.geofence.findFirst({
+      where: { companyId, branchId, isActive: true },
+      select: { latitude: true, longitude: true, radiusMeters: true },
+    });
+    if (!fence) {
+      throw new BadRequestException({
+        message: 'No active geofence is configured for your branch.',
+        errors: [{ code: 'GEOFENCE_UNAVAILABLE', message: 'No active geofence is configured.' }],
+      });
+    }
+
+    const evaluation = this.geofence.evaluate(
+      { latitude: dto.latitude, longitude: dto.longitude },
+      { latitude: fence.latitude, longitude: fence.longitude, radiusMeters: fence.radiusMeters },
+    );
+    const inside = evaluation.inside;
+    const status: 'VERIFIED' | 'OUTSIDE_GEOFENCE' = inside ? 'VERIFIED' : 'OUTSIDE_GEOFENCE';
+
+    const updated = await this.prisma.presenceVerification.update({
+      where: { id: verification.id },
+      data: {
+        status,
+        verifiedAt: now,
+        latitude: dto.latitude,
+        longitude: dto.longitude,
+        distanceMeters: evaluation.distanceMeters,
+        geofenceRadiusMeters: evaluation.radiusMeters,
+      },
+    });
+
+    // Audit result without raw coordinates; distance/radius are enough for review.
+    await this.audit.record({
+      companyId,
+      action: `attendance.presence_verification.${status === 'VERIFIED' ? 'verified' : 'outside_geofence'}`,
+      resource: 'attendance.presence_verification',
+      resourceId: verification.id,
+      after: {
+        branchId,
+        status,
+        distanceMeters: evaluation.distanceMeters,
+        geofenceRadiusMeters: evaluation.radiusMeters,
+      },
+    });
+
+    if (verification.employee.userId) {
+      await this.notifications.createForUser({
+        companyId,
+        recipientUserId: verification.employee.userId,
+        eventType: `presence_verification.${status === 'VERIFIED' ? 'verified' : 'outside_geofence'}`,
+        title: inside ? 'Presence verified' : 'Presence check flagged',
+        body: inside
+          ? 'Your presence was verified within the branch area.'
+          : 'Your presence check was flagged because you were outside the branch area.',
+        relatedEntityType: 'presence_verification',
+        relatedEntityId: verification.id,
+      });
+    }
+
+    return { ...this.serializeVerified({ ...updated, verificationType: 'updated' as const }), inside };
+  }
+
+  private serializeVerified(verification: any) {
+    return {
+      id: verification.id,
+      status: verification.status,
+      dueAt: verification.dueAt,
+      verifiedAt: verification.verifiedAt,
+      branchId: verification.branchId,
+      distanceMeters: verification.distanceMeters,
+      geofenceRadiusMeters: verification.geofenceRadiusMeters,
+    };
   }
 
   /**
