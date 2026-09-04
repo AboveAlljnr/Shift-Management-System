@@ -21,6 +21,7 @@ import {
   Bell,
   User,
   BarChart3,
+  CalendarClock,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useState } from 'react';
@@ -37,7 +38,10 @@ const EMPLOYEE_SECTIONS: NavSection[] = [
   },
   {
     heading: 'SCHEDULING',
-    items: [{ href: '/schedule', label: 'My Schedule', icon: Calendar }],
+    items: [
+      { href: '/schedule', label: 'My Schedule', icon: Calendar },
+      { href: '/availability', label: 'Availability', icon: CalendarClock },
+    ],
   },
   {
     heading: 'TIME',
@@ -71,7 +75,10 @@ const MANAGER_SECTIONS: NavSection[] = [
   },
   {
     heading: 'SCHEDULING',
-    items: [{ href: '/schedule', label: 'Schedule', icon: Calendar }],
+    items: [
+      { href: '/schedule', label: 'Schedule', icon: Calendar },
+      { href: '/availability', label: 'Availability', icon: CalendarClock },
+    ],
   },
   {
     heading: 'TIME',

@@ -1,16 +1,22 @@
 import type {
   AttendanceRecord,
+  AvailabilityException,
+  AvailabilityRule,
   Branch,
   Department,
   Employee,
   EmploymentType,
   LeaveRequest,
   LeaveType,
+  Schedule,
+  ScheduleVersion,
   Shift,
   ShiftAssignment,
   ShiftConflictOverride,
   Team,
 } from '@sms/shared';
+
+export type { Schedule, ScheduleVersion, AvailabilityRule, AvailabilityException } from '@sms/shared';
 
 import { apiClient } from '@/lib/api/client';
 
@@ -59,8 +65,22 @@ export interface ShiftDetail extends Shift {
   department?: Department | null;
   team?: Team | null;
   assignments: ShiftAssignmentDetail[];
-  requirements: { id: string; headcount: number }[];
+  requirements: {
+    id: string;
+    headcount: number;
+    position?: { id: string; name: string; code: string } | null;
+    skills?: { skill: { id: string; name: string } }[];
+    certifications?: { certification: { id: string; name: string } }[];
+  }[];
   conflictOverrides: ShiftConflictOverride[];
+  coverage?: {
+    shiftId: string;
+    headcountRequired: number;
+    headcountFilled: number;
+    shortfall: number;
+    covered: boolean;
+    overstaffed: boolean;
+  };
 }
 
 export interface AttendanceRecordDetail extends AttendanceRecord {
@@ -155,6 +175,7 @@ function getTokenPayload(): { sub?: string } | null {
 export function fetchShifts(params?: {
   branchId?: string;
   departmentId?: string;
+  scheduleId?: string;
   startDate?: string;
   endDate?: string;
   status?: string;
@@ -198,6 +219,127 @@ export function validateAssignment(shiftId: string, employeeId: string): Promise
   warnings: { type: string; severity: string; ruleIdentifier: string; message: string; overrideAllowed: boolean }[];
 }> {
   return postData(`/shifts/${shiftId}/validate-assignment`, { employeeId });
+}
+
+// ---- Schedules (publish / versions) ----
+
+export interface ScheduleDetail extends Schedule {
+  branch?: Branch | null;
+  _count: { shifts: number; versions: number };
+}
+
+export function fetchSchedules(params?: {
+  branchId?: string;
+  startDate?: string;
+  endDate?: string;
+}): Promise<ScheduleDetail[]> {
+  return getData<ScheduleDetail[]>('/schedules', params);
+}
+
+export function createSchedule(body: {
+  branchId?: string;
+  name: string;
+  periodStart: string;
+  periodEnd: string;
+}): Promise<ScheduleDetail> {
+  return postData<ScheduleDetail>('/schedules', body);
+}
+
+export function publishSchedule(scheduleId: string, body?: { notes?: string }): Promise<{
+  success: boolean;
+  versionNumber: number;
+  publishedAt: string;
+}> {
+  return postData(`/schedules/${scheduleId}/publish`, body ?? {});
+}
+
+export function fetchScheduleVersions(scheduleId: string): Promise<ScheduleVersion[]> {
+  return getData<ScheduleVersion[]>(`/schedules/${scheduleId}/versions`);
+}
+
+// ---- Coverage ----
+
+export interface ShiftCoverage {
+  shiftId: string;
+  headcountRequired: number;
+  headcountFilled: number;
+  shortfall: number;
+  covered: boolean;
+  overstaffed: boolean;
+}
+
+export function fetchCoverage(shiftIds: string[]): Promise<ShiftCoverage[]> {
+  return getData<ShiftCoverage[]>('/schedules/coverage', { shiftIds: shiftIds.join(',') });
+}
+
+// ---- Availability ----
+
+export interface AvailabilityRuleDetail extends AvailabilityRule {
+  employee: { id: string; firstName: string; lastName: string; email: string };
+}
+
+export interface AvailabilityExceptionDetail extends AvailabilityException {
+  employee: { id: string; firstName: string; lastName: string; email: string };
+}
+
+export function fetchAvailabilityRules(params?: { employeeId?: string }): Promise<AvailabilityRuleDetail[]> {
+  return getData<AvailabilityRuleDetail[]>('/availability/rules', params);
+}
+
+export function createAvailabilityRule(body: {
+  employeeId: string;
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  isAvailable?: boolean;
+  effectiveFrom: string;
+  effectiveTo?: string | null;
+}): Promise<AvailabilityRuleDetail> {
+  return postData<AvailabilityRuleDetail>('/availability/rules', body);
+}
+
+export function updateAvailabilityRule(
+  id: string,
+  body: Partial<{
+    dayOfWeek: number;
+    startTime: string;
+    endTime: string;
+    isAvailable: boolean;
+    effectiveFrom: string;
+    effectiveTo: string | null;
+  }>,
+): Promise<AvailabilityRuleDetail> {
+  return patchData<AvailabilityRuleDetail>(`/availability/rules/${id}`, body);
+}
+
+export function deleteAvailabilityRule(id: string): Promise<{ success: boolean }> {
+  return apiClient.delete<{ data: { success: boolean }; message: string }>(`/availability/rules/${id}`).then((r) => r.data.data);
+}
+
+export function fetchAvailabilityExceptions(params?: { employeeId?: string }): Promise<AvailabilityExceptionDetail[]> {
+  return getData<AvailabilityExceptionDetail[]>('/availability/exceptions', params);
+}
+
+export function createAvailabilityException(body: {
+  employeeId: string;
+  date: string;
+  isAvailable?: boolean;
+  startTime?: string;
+  endTime?: string;
+  reason?: string;
+}): Promise<AvailabilityExceptionDetail> {
+  return postData<AvailabilityExceptionDetail>('/availability/exceptions', body);
+}
+
+export function updateAvailabilityException(
+  id: string,
+  body: Partial<{ date: string; isAvailable: boolean; startTime: string | null; endTime: string | null; reason: string | null }>,
+): Promise<AvailabilityExceptionDetail> {
+  return patchData<AvailabilityExceptionDetail>(`/availability/exceptions/${id}`, body);
+}
+
+export function deleteAvailabilityException(id: string): Promise<{ success: boolean }> {
+  return apiClient.delete<{ data: { success: boolean }; message: string }>(`/availability/exceptions/${id}`).then((r) => r.data.data);
 }
 
 // ---- Schedule optimization (Generate Suggested Schedule) ----

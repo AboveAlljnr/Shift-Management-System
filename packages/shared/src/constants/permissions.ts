@@ -17,6 +17,9 @@ export const PERMISSION_ACTIONS = [
   'schedule.override_lock',
   'shift.assign',
   'shift.conflict_override',
+  // Availability
+  'availability.read',
+  'availability.manage',
   // Attendance
   'attendance.read',
   'attendance.correct',
@@ -78,6 +81,8 @@ export const ROLE_PERMISSION_TEMPLATES: Record<string, readonly string[]> = {
     'schedule.lock',
     'shift.assign',
     'shift.conflict_override',
+    'availability.read',
+    'availability.manage',
     'attendance.read',
     'attendance.correct',
     'attendance.override',
@@ -117,6 +122,8 @@ export const ROLE_PERMISSION_TEMPLATES: Record<string, readonly string[]> = {
     'schedule.lock',
     'shift.assign',
     'shift.conflict_override',
+    'availability.read',
+    'availability.manage',
     'attendance.read',
     'attendance.correct',
     'attendance.export',
@@ -131,11 +138,20 @@ export const ROLE_PERMISSION_TEMPLATES: Record<string, readonly string[]> = {
     'schedule.read',
     'shift.assign',
     'shift.conflict_override',
+    'availability.read',
     'attendance.read',
   ],
 
   // Employee: self-service only.
-  EMPLOYEE: ['employee.read', 'schedule.read', 'attendance.read', 'leave.read', 'leave.request'],
+  EMPLOYEE: [
+    'employee.read',
+    'schedule.read',
+    'availability.read',
+    'availability.manage',
+    'attendance.read',
+    'leave.read',
+    'leave.request',
+  ],
 };
 
 export function getRolePermissionTemplate(roleCode: string): readonly string[] {

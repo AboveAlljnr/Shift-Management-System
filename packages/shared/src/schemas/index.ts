@@ -83,6 +83,54 @@ export const PublishSchedulesSchema = z.object({
   notes: z.string().optional(),
 });
 
+// ---- Schedule management (publish / versions) ----
+export const CreateScheduleSchema = z.object({
+  branchId: z.string().uuid().optional(),
+  name: z.string().min(1).max(200),
+  periodStart: z.string().datetime(),
+  periodEnd: z.string().datetime(),
+});
+
+export const PublishScheduleSchema = z.object({
+  notes: z.string().optional(),
+});
+
+// ---- Availability management ----
+export const DayOfWeekEnum = z.enum([
+  'SUNDAY',
+  'MONDAY',
+  'TUESDAY',
+  'WEDNESDAY',
+  'THURSDAY',
+  'FRIDAY',
+  'SATURDAY',
+]);
+
+export const CreateAvailabilityRuleSchema = z.object({
+  employeeId: z.string().uuid(),
+  dayOfWeek: z.number().int().min(0).max(6),
+  startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'HH:mm format'),
+  endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'HH:mm format'),
+  isAvailable: z.boolean().default(true),
+  effectiveFrom: z.string().datetime(),
+  effectiveTo: z.string().datetime().nullable().optional(),
+});
+
+export const UpdateAvailabilityRuleSchema = CreateAvailabilityRuleSchema.partial();
+
+export const CreateAvailabilityExceptionSchema = z.object({
+  employeeId: z.string().uuid(),
+  date: z.string().datetime(),
+  isAvailable: z.boolean().default(false),
+  startTime: z.string().optional(),
+  endTime: z.string().optional(),
+  reason: z.string().optional(),
+});
+
+export const UpdateAvailabilityExceptionSchema = CreateAvailabilityExceptionSchema
+  .omit({ employeeId: true })
+  .partial();
+
 // ---- Attendance schemas ----
 export const ClockEventSchema = z.object({
   eventType: z.enum(['clock_in', 'clock_out', 'break_start', 'break_end', 'correction', 'manual_override']),
@@ -178,6 +226,12 @@ export type UpdateShiftDto = z.infer<typeof UpdateShiftSchema>;
 export type AssignShiftDto = z.infer<typeof AssignShiftSchema>;
 export type ShiftConflictOverrideDto = z.infer<typeof ShiftConflictOverrideSchema>;
 export type PublishSchedulesDto = z.infer<typeof PublishSchedulesSchema>;
+export type CreateScheduleDto = z.infer<typeof CreateScheduleSchema>;
+export type PublishScheduleDto = z.infer<typeof PublishScheduleSchema>;
+export type CreateAvailabilityRuleDto = z.infer<typeof CreateAvailabilityRuleSchema>;
+export type UpdateAvailabilityRuleDto = z.infer<typeof UpdateAvailabilityRuleSchema>;
+export type CreateAvailabilityExceptionDto = z.infer<typeof CreateAvailabilityExceptionSchema>;
+export type UpdateAvailabilityExceptionDto = z.infer<typeof UpdateAvailabilityExceptionSchema>;
 export type ClockEventDto = z.infer<typeof ClockEventSchema>;
 export type AttendanceCorrectionDto = z.infer<typeof AttendanceCorrectionSchema>;
 export type BranchGeofenceDto = z.infer<typeof BranchGeofenceSchema>;

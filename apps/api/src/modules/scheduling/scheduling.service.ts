@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import type {
   CreateShiftDto,
+  CreateScheduleDto,
   AssignShiftDto,
   ShiftConflictOverrideDto,
   OptimizeScheduleDto,
@@ -55,6 +56,27 @@ export interface ScheduleSuggestion {
 
 const MIN_REST_HOURS = 11;
 
+const WEEKDAY_NAMES = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+];
+
+/** Clock time (minutes since midnight) of a Date, using local wall-clock components. */
+function toClockMinutes(d: Date): number {
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+/** Parse an 'HH:mm' availability window bound into minutes since midnight. */
+function to24hMinutes(hhmm: string): number {
+  const [h, m] = hhmm.split(':').map((n) => Number(n));
+  return (h || 0) * 60 + (m || 0);
+}
+
 @Injectable()
 export class SchedulingService {
   constructor(
@@ -68,6 +90,7 @@ export class SchedulingService {
     filters: {
       branchId?: string;
       departmentId?: string;
+      scheduleId?: string;
       startDate?: string;
       endDate?: string;
       status?: string;
@@ -92,6 +115,7 @@ export class SchedulingService {
 
     if (filters.branchId) where.branchId = filters.branchId;
     if (filters.departmentId) where.departmentId = filters.departmentId;
+    if (filters.scheduleId) where.scheduleId = filters.scheduleId;
     if (filters.status) where.status = filters.status;
     if (filters.startDate || filters.endDate) {
       where.startAt = {};
@@ -99,7 +123,7 @@ export class SchedulingService {
       if (filters.endDate) where.startAt.lte = new Date(filters.endDate);
     }
 
-    return this.prisma.shift.findMany({
+    const shifts = await this.prisma.shift.findMany({
       where,
       orderBy: { startAt: 'asc' },
       include: {
@@ -118,6 +142,27 @@ export class SchedulingService {
           : { include: { employee: true } },
         conflictOverrides: true,
       },
+    });
+
+    // Attach staffing coverage (required vs filled headcount) for display in the
+    // schedule UI (under/over-staffed indicators).
+    return shifts.map((s) => {
+      const headcountRequired = s.requirements.reduce((sum, r) => sum + r.headcount, 0);
+      const headcountFilled = s.assignments.filter(
+        (a) => a.status !== 'cancelled' && a.status !== 'dropped',
+      ).length;
+      const shortfall = Math.max(0, headcountRequired - headcountFilled);
+      return {
+        ...s,
+        coverage: {
+          shiftId: s.id,
+          headcountRequired,
+          headcountFilled,
+          shortfall,
+          covered: shortfall === 0,
+          overstaffed: headcountFilled > headcountRequired,
+        },
+      };
     });
   }
 
@@ -366,6 +411,43 @@ export class SchedulingService {
       });
     }
 
+    // 4b. Check recurring availability rules (day-of-week + time window) (WARNING)
+    const dayOfWeek = shiftDate.getDay();
+    const shiftStartClock = toClockMinutes(shift.startAt);
+    const shiftEndClock = toClockMinutes(shift.endAt);
+    const applicableRule = employee.availabilityRules.find(
+      (r) =>
+        r.dayOfWeek === dayOfWeek &&
+        (!r.effectiveFrom || shiftDate >= r.effectiveFrom) &&
+        (!r.effectiveTo || shiftDate <= r.effectiveTo),
+    );
+
+    if (applicableRule) {
+      const ruleAvailable = to24hMinutes(applicableRule.startTime) <= shiftStartClock
+        && to24hMinutes(applicableRule.endTime) >= shiftEndClock;
+      if (!applicableRule.isAvailable) {
+        warnings.push({
+          type: 'AVAILABILITY_RULE',
+          severity: 'WARNING',
+          employeeId,
+          shiftId,
+          ruleIdentifier: 'AVAILABILITY_RULE',
+          message: `Employee is not available on ${WEEKDAY_NAMES[dayOfWeek]} per their availability rules`,
+          overrideAllowed: true,
+        });
+      } else if (!ruleAvailable) {
+        warnings.push({
+          type: 'AVAILABILITY_RULE_WINDOW',
+          severity: 'WARNING',
+          employeeId,
+          shiftId,
+          ruleIdentifier: 'AVAILABILITY_RULE',
+          message: `Shift falls outside the employee's ${WEEKDAY_NAMES[dayOfWeek]} availability window (${applicableRule.startTime}-${applicableRule.endTime})`,
+          overrideAllowed: true,
+        });
+      }
+    }
+
     // 5. Check minimum rest period (11 hours default) (WARNING)
     const minRestHours = 11;
     const restWindowStart = new Date(shift.startAt.getTime() - minRestHours * 3600 * 1000);
@@ -547,8 +629,159 @@ export class SchedulingService {
         },
       });
 
-      return { success: true, versionNumber: nextVersionNumber };
+      return {
+        success: true,
+        versionNumber: nextVersionNumber,
+        publishedAt: new Date().toISOString(),
+      };
     });
+  }
+
+  async createSchedule(companyId: string, dto: CreateScheduleDto, userId: string) {
+    if (dto.branchId) {
+      const branch = await this.prisma.branch.findFirst({
+        where: { id: dto.branchId, companyId },
+        select: { id: true },
+      });
+      if (!branch) {
+        throw new NotFoundException('branch does not belong to this company');
+      }
+    }
+
+    if (new Date(dto.periodEnd) < new Date(dto.periodStart)) {
+      throw new BadRequestException('periodEnd must be on or after periodStart');
+    }
+
+    return this.prisma.schedule.create({
+      data: {
+        companyId,
+        branchId: dto.branchId,
+        name: dto.name,
+        periodStart: new Date(dto.periodStart),
+        periodEnd: new Date(dto.periodEnd),
+        status: 'draft',
+        createdById: userId,
+      },
+    });
+  }
+
+  /**
+   * List schedules for the company, restricted to the caller's granted scope
+   * (ADT-003). Optionally filtered by branch / date window.
+   */
+  async findSchedules(
+    companyId: string,
+    filters: { branchId?: string; startDate?: string; endDate?: string },
+    membershipId: string,
+  ) {
+    const where: Record<string, any> = { companyId };
+    const scopeWhere = await this.scopeFilter.branchWhere(membershipId, companyId);
+    if (filters.branchId) {
+      where.branchId = filters.branchId;
+    } else if (scopeWhere) {
+      // A caller without company-wide scope only sees schedules for their branches.
+      where.branchId = { in: [] };
+    }
+
+    if (filters.startDate || filters.endDate) {
+      where.OR = [];
+      if (filters.startDate) {
+        where.OR.push({ periodEnd: { gte: new Date(filters.startDate) } });
+      }
+      if (filters.endDate) {
+        where.OR.push({ periodStart: { lte: new Date(filters.endDate) } });
+      }
+      if (where.OR.length === 0) delete where.OR;
+    }
+
+    const schedules = await this.prisma.schedule.findMany({
+      where,
+      orderBy: { periodStart: 'asc' },
+      include: {
+        branch: true,
+        _count: { select: { shifts: true, versions: true } },
+      },
+    });
+
+    return schedules;
+  }
+
+  /**
+   * Version history for a schedule (immutable snapshots, newest first). Returned
+   * snapshots are trimmed to light metadata; the full snapshot is retrievable via
+   * the version detail endpoint.
+   */
+  async findScheduleVersions(companyId: string, scheduleId: string, membershipId: string) {
+    const schedule = await this.prisma.schedule.findFirst({
+      where: {
+        id: scheduleId,
+        companyId,
+        ...(await this.branchScopeWhere(membershipId, companyId)),
+      },
+      select: { id: true },
+    });
+    if (!schedule) {
+      throw new NotFoundException(`Schedule with ID ${scheduleId} not found`);
+    }
+
+    return this.prisma.scheduleVersion.findMany({
+      where: { scheduleId },
+      orderBy: { versionNumber: 'desc' },
+      select: {
+        id: true,
+        scheduleId: true,
+        versionNumber: true,
+        publishedAt: true,
+        notes: true,
+        publishedBy: { select: { id: true, name: true, email: true } },
+      },
+    });
+  }
+
+  /**
+   * Compute staffing coverage for a set of shifts: required vs. filled headcount
+   * per shift (summing all requirement headcounts), so callers can flag
+   * under/over-staffed shifts. Assignment counts exclude cancelled/dropped.
+   */
+  async coverage(companyId: string, shiftIds: string[], membershipId: string) {
+    const where: Record<string, any> = {
+      id: { in: shiftIds },
+      companyId,
+    };
+    const queryScope = await this.scopeFilter.shiftQueryScope(membershipId, companyId);
+    if (queryScope.shiftWhere) {
+      where.AND = [queryScope.shiftWhere];
+    }
+
+    const shifts = await this.prisma.shift.findMany({
+      where,
+      include: {
+        requirements: true,
+        assignments: { where: { status: { notIn: ['cancelled', 'dropped'] } } },
+      },
+    });
+
+    return shifts.map((s) => {
+      const headcountRequired = s.requirements.reduce((sum, r) => sum + r.headcount, 0);
+      const headcountFilled = s.assignments.length;
+      const shortfall = Math.max(0, headcountRequired - headcountFilled);
+      return {
+        shiftId: s.id,
+        headcountRequired,
+        headcountFilled,
+        shortfall,
+        covered: shortfall === 0,
+        overstaffed: headcountFilled > headcountRequired,
+      };
+    });
+  }
+
+  private async branchScopeWhere(membershipId: string, companyId: string): Promise<Record<string, any>> {
+    const scopeWhere = await this.scopeFilter.branchWhere(membershipId, companyId);
+    // branchWhere returns the branch-scoped predicate; for schedule filtering we
+    // only allow company-wide callers to see all schedules. Employees with a
+    // non-company scope are handled by the controller read path when relevant.
+    return scopeWhere ? { branchId: { in: [] } } : {};
   }
 
   /**

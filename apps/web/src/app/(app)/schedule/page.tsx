@@ -20,13 +20,19 @@ import {
 import {
   applyScheduleSuggestions,
   assignEmployeeToShift,
+  createSchedule,
   createShift,
   fetchBranches,
   fetchDepartments,
   fetchEmployees,
+  fetchScheduleVersions,
+  fetchSchedules,
   fetchShifts,
   generateScheduleSuggestions,
+  publishSchedule,
+  type ScheduleDetail,
   type ScheduleSuggestion,
+  type ScheduleVersion,
   type ShiftDetail,
   type SuggestedAssignment,
 } from '@/lib/api/queries';
@@ -66,6 +72,7 @@ export default function SchedulePage() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [showGenerate, setShowGenerate] = useState(false);
+  const [showSchedules, setShowSchedules] = useState(false);
   const [form, setForm] = useState({
     name: '',
     branchId: '',
@@ -115,6 +122,10 @@ export default function SchedulePage() {
           <p className="text-sm text-slate-500 mt-0.5">{(shifts ?? []).length} shifts · create, assign, and track</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={() => setShowSchedules(true)} className="gap-2">
+            <Calendar size={14} className="text-brand" />
+            Schedules
+          </Button>
           <Button variant="secondary" size="sm" onClick={() => setShowGenerate(true)} className="gap-2">
             <Sparkles size={14} className="text-brand" />
             Smart Schedule Optimizer
@@ -262,6 +273,13 @@ export default function SchedulePage() {
           employees={employees?.data ?? []}
           shifts={shifts ?? []}
           onClose={() => setShowGenerate(false)}
+        />
+      )}
+
+      {showSchedules && (
+        <ScheduleManagerDialog
+          branches={branches ?? []}
+          onClose={() => setShowSchedules(false)}
         />
       )}
     </div>
@@ -515,6 +533,299 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function ScheduleManagerDialog({
+  branches,
+  onClose,
+}: {
+  branches: BranchOption[];
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const { data: schedules, isLoading } = useQuery({
+    queryKey: ['schedules'],
+    queryFn: () => fetchSchedules(),
+  });
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showVersionsFor, setShowVersionsFor] = useState<ScheduleDetail | null>(null);
+  const [publishFor, setPublishFor] = useState<ScheduleDetail | null>(null);
+  const [notes, setNotes] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [form, setForm] = useState({ name: '', branchId: '', periodStart: '', periodEnd: '' });
+
+  const create = useMutation({
+    mutationFn: () =>
+      createSchedule({
+        name: form.name,
+        branchId: form.branchId || undefined,
+        periodStart: new Date(form.periodStart).toISOString(),
+        periodEnd: new Date(form.periodEnd).toISOString(),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['schedules'] });
+      setShowCreateForm(false);
+      setForm({ name: '', branchId: '', periodStart: '', periodEnd: '' });
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : 'Unable to create schedule'),
+  });
+
+  const publish = useMutation({
+    mutationFn: () => publishSchedule(publishFor!.id, { notes: notes || undefined }),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['schedules'] });
+      setPublishFor(null);
+      setNotes('');
+      setError(`Published as version ${res.versionNumber}`);
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : 'Unable to publish schedule'),
+  });
+
+  const branchName = (id?: string | null) => branches.find((b) => b.id === id)?.name ?? 'Company-wide';
+
+  return (
+    <Modal open onOpenChange={(o) => !o && onClose()}>
+      <ModalContent className="max-w-2xl">
+        <ModalHeader>
+          <ModalTitle>Schedules &amp; publish</ModalTitle>
+          <ModalDescription>
+            Group shifts into periods, publish them to teams, and keep an immutable version history.
+          </ModalDescription>
+        </ModalHeader>
+
+        <div className="space-y-4">
+          {error && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
+              {error}
+            </div>
+          )}
+
+          {showVersionsFor ? (
+            <VersionsPanel schedule={showVersionsFor} onBack={() => setShowVersionsFor(null)} />
+          ) : showCreateForm ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setError(null);
+                if (!form.name.trim()) return setError('Schedule name is required');
+                if (!form.periodStart || !form.periodEnd) return setError('Period dates are required');
+                if (new Date(form.periodEnd) < new Date(form.periodStart)) return setError('End date must be on or after start date');
+                create.mutate();
+              }}
+              className="space-y-4"
+            >
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-slate-700">
+                  Schedule name <span className="text-red-500">*</span>
+                </label>
+                <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Week 37 roster" />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700">Branch (optional)</label>
+                  <select value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })} className={inputClass}>
+                    <option value="">Company-wide</option>
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700">
+                    Period start <span className="text-red-500">*</span>
+                  </label>
+                  <input type="date" value={form.periodStart} onChange={(e) => setForm({ ...form, periodStart: e.target.value })} className={inputClass} />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700">
+                    Period end <span className="text-red-500">*</span>
+                  </label>
+                  <input type="date" value={form.periodEnd} onChange={(e) => setForm({ ...form, periodEnd: e.target.value })} className={inputClass} />
+                </div>
+              </div>
+
+              {create.isError && error && (
+                <div className="rounded-lg border border-red-300/40 bg-red-500/10 px-3 py-2 text-sm text-red-600">{error}</div>
+              )}
+
+              <ModalFooter className="pt-2">
+                <Button variant="secondary" onClick={() => { setShowCreateForm(false); setError(null); }}>Cancel</Button>
+                <Button type="submit" disabled={create.isPending}>{create.isPending ? 'Saving…' : 'Create schedule'}</Button>
+              </ModalFooter>
+            </form>
+          ) : (
+            <>
+              <div className="flex justify-end">
+                <Button variant="primary" size="sm" onClick={() => setShowCreateForm(true)} className="gap-2">
+                  <Plus size={14} /> New schedule
+                </Button>
+              </div>
+
+              {isLoading ? (
+                <div className="space-y-2">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <div key={i} className="h-14 animate-pulse rounded-xl bg-slate-200/60" />
+                  ))}
+                </div>
+              ) : (schedules ?? []).length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center">
+                  <p className="font-semibold text-slate-700">No schedules yet</p>
+                  <p className="text-sm text-slate-500">Create a schedule to group shifts into a publishable period.</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {(schedules ?? []).map((s) => (
+                    <div key={s.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="font-semibold text-slate-800">{s.name}</p>
+                          <StatusBadge status={s.status} />
+                        </div>
+                        <p className="text-xs text-slate-500">
+                          {format(parseISO(s.periodStart), 'MMM d')} – {format(parseISO(s.periodEnd), 'MMM d, yyyy')}
+                          {' · '}{branchName(s.branchId)}
+                          {' · '}{s._count.shifts} shifts
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button variant="secondary" size="sm" onClick={() => setShowVersionsFor(s)}>
+                          {s._count.versions} version{s._count.versions === 1 ? '' : 's'}
+                        </Button>
+                        <Button variant="secondary" size="sm" onClick={() => setPublishFor(s)} disabled={s.status === 'locked'}>
+                          Publish
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <ModalFooter className="pt-2">
+          <Button variant="secondary" onClick={onClose}>Close</Button>
+        </ModalFooter>
+
+        {publishFor && (
+          <PublishConfirmDialog
+            schedule={publishFor}
+            onCancel={() => setPublishFor(null)}
+            onConfirm={() => publish.mutate()}
+            notes={notes}
+            setNotes={setNotes}
+            pending={publish.isPending}
+          />
+        )}
+      </ModalContent>
+    </Modal>
+  );
+}
+
+function PublishConfirmDialog({
+  schedule,
+  onCancel,
+  onConfirm,
+  notes,
+  setNotes,
+  pending,
+}: {
+  schedule: ScheduleDetail;
+  onCancel: () => void;
+  onConfirm: () => void;
+  notes: string;
+  setNotes: (v: string) => void;
+  pending: boolean;
+}) {
+  return (
+    <Modal open onOpenChange={(o) => !o && onCancel()}>
+      <ModalContent className="max-w-md">
+        <ModalHeader>
+          <ModalTitle>Publish &quot;{schedule.name}&quot;</ModalTitle>
+          <ModalDescription>
+            Publishing creates an immutable version snapshot and pushes {schedule._count.shifts} shift(s) to your team.
+            Once published the schedule status becomes &quot;published&quot;.
+          </ModalDescription>
+        </ModalHeader>
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium text-slate-700">Publish notes (optional)</label>
+          <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. Final roster for week 37" />
+        </div>
+        <ModalFooter className="pt-4">
+          <Button variant="secondary" onClick={onCancel}>Cancel</Button>
+          <Button onClick={onConfirm} disabled={pending}>{pending ? 'Publishing…' : 'Publish schedule'}</Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+}
+
+function VersionsPanel({
+  schedule,
+  onBack,
+}: {
+  schedule: ScheduleDetail;
+  onBack: () => void;
+}) {
+  const { data: versions, isLoading } = useQuery({
+    queryKey: ['scheduleVersions', schedule.id],
+    queryFn: () => fetchScheduleVersions(schedule.id),
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="font-semibold text-slate-800">Version history — {schedule.name}</p>
+          <p className="text-xs text-slate-500">Immutable snapshots, newest first</p>
+        </div>
+        <Button variant="secondary" size="sm" onClick={onBack}>Back</Button>
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <div key={i} className="h-12 animate-pulse rounded-xl bg-slate-200/60" />
+          ))}
+        </div>
+      ) : (versions ?? []).length === 0 ? (
+        <p className="text-sm text-slate-500">No published versions yet. Publish this schedule to create the first snapshot.</p>
+      ) : (
+        <ol className="relative space-y-3 border-l border-slate-200 pl-4">
+          {(versions ?? []).map((v) => (
+            <VersionItem key={v.id} version={v} />
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+function VersionItem({ version }: { version: ScheduleVersion }) {
+  return (
+    <li className="relative">
+      <span className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full bg-brand ring-4 ring-brand-light" />
+      <div className="rounded-xl border border-slate-200 px-3 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-bold text-slate-800">v{version.versionNumber}</p>
+          <p className="text-xs text-slate-500">{format(parseISO(version.publishedAt), 'MMM d, yyyy · h:mm a')}</p>
+        </div>
+        <p className="text-xs text-slate-500">
+          Published by {version.publishedBy?.name ?? version.publishedBy?.email ?? 'Unknown'}
+        </p>
+        {version.notes && <p className="mt-1 text-sm text-slate-600">{version.notes}</p>}
+      </div>
+    </li>
+  );
+}
+
+interface BranchOption {
+  id: string;
+  name: string;
+}
+
 function ShiftCard({
   shift,
   employees,
@@ -557,6 +868,11 @@ function ShiftCard({
             {shift.branch ? ` · ${shift.branch.name}` : ''}
             {deptName ? ` · ${deptName}` : ''}
           </p>
+          {shift.coverage && shift.coverage.headcountRequired > 0 && (
+            <p className="mt-1 flex items-center gap-2 text-xs">
+              <CoverageBadge coverage={shift.coverage} />
+            </p>
+          )}
           {shift.assignments.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1">
               {shift.assignments.map((a) => (
@@ -625,6 +941,22 @@ function groupByDay(shifts: ShiftDetail[]): [string, ShiftDetail[]][] {
     map.set(day, list);
   }
   return Array.from(map.entries());
+}
+
+function CoverageBadge({ coverage }: { coverage: NonNullable<ShiftDetail['coverage']> }) {
+  if (coverage.covered) {
+    return (
+      <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+        {coverage.headcountFilled}/{coverage.headcountRequired} staffed
+        {coverage.overstaffed && ' · overstaffed'}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">
+      Understaffed · {coverage.headcountFilled}/{coverage.headcountRequired} (need {coverage.shortfall} more)
+    </span>
+  );
 }
 
 function cn(...inputs: (string | false | undefined | null)[]): string {

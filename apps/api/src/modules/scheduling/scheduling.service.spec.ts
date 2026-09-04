@@ -269,7 +269,7 @@ describe('SchedulingService — publishing', () => {
     const service = new SchedulingService(prisma, companyWideScopeFilter());
     const result = await service.publishSchedule('c1', 'sch1', 'u1', 'First publish');
 
-    expect(result).toEqual({ success: true, versionNumber: 1 });
+    expect(result).toEqual(expect.objectContaining({ success: true, versionNumber: 1, publishedAt: expect.any(String) }));
     expect(scheduleVersion.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ scheduleId: 'sch1', versionNumber: 1, publishedById: 'u1' }),
@@ -289,5 +289,100 @@ describe('SchedulingService — publishing', () => {
 
     const service = new SchedulingService(prisma, companyWideScopeFilter());
     await expect(service.publishSchedule('c1', 'sch9', 'u1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('SchedulingService — availability rule enforcement', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const ruleDay = new Date('2026-09-02T09:00:00.000Z').getDay();
+
+  it('adds a WARNING when the shift falls outside the employee availability window', async () => {
+    const { prisma, shift, employee, shiftAssignment } = createDeps();
+    shift.findFirst.mockResolvedValue(baseShift);
+    employee.findFirst.mockResolvedValue({
+      ...activeEmployee,
+      availabilityRules: [
+        { dayOfWeek: ruleDay, startTime: '00:00', endTime: '08:00', isAvailable: true, effectiveFrom: new Date('2026-01-01T00:00:00.000Z'), effectiveTo: null },
+      ],
+    });
+    shiftAssignment.findFirst.mockResolvedValue(null);
+
+    const service = new SchedulingService(prisma, companyWideScopeFilter());
+    const result = await service.validateAssignment('c1', 's1', 'e1');
+
+    expect(result.isValid).toBe(true);
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({ type: 'AVAILABILITY_RULE_WINDOW', severity: 'WARNING', overrideAllowed: true }),
+    );
+  });
+
+  it('adds a WARNING when the employee has a not-available rule for the day', async () => {
+    const { prisma, shift, employee, shiftAssignment } = createDeps();
+    shift.findFirst.mockResolvedValue(baseShift);
+    employee.findFirst.mockResolvedValue({
+      ...activeEmployee,
+      availabilityRules: [
+        { dayOfWeek: ruleDay, startTime: '09:00', endTime: '17:00', isAvailable: false, effectiveFrom: new Date('2026-01-01T00:00:00.000Z'), effectiveTo: null },
+      ],
+    });
+    shiftAssignment.findFirst.mockResolvedValue(null);
+
+    const service = new SchedulingService(prisma, companyWideScopeFilter());
+    const result = await service.validateAssignment('c1', 's1', 'e1');
+
+    expect(result.isValid).toBe(true);
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({ type: 'AVAILABILITY_RULE', severity: 'WARNING', overrideAllowed: true }),
+    );
+  });
+
+  it('does not add a warning when the shift is within the availability window', async () => {
+    const { prisma, shift, employee, shiftAssignment } = createDeps();
+    shift.findFirst.mockResolvedValue(baseShift);
+    employee.findFirst.mockResolvedValue({
+      ...activeEmployee,
+      availabilityRules: [
+        { dayOfWeek: ruleDay, startTime: '09:00', endTime: '17:00', isAvailable: true, effectiveFrom: new Date('2026-01-01T00:00:00.000Z'), effectiveTo: null },
+      ],
+    });
+    shiftAssignment.findFirst.mockResolvedValue(null);
+
+    const service = new SchedulingService(prisma, companyWideScopeFilter());
+    const result = await service.validateAssignment('c1', 's1', 'e1');
+
+    expect(result.isValid).toBe(true);
+    expect(result.warnings.some((w) => w.type === 'AVAILABILITY_RULE' || w.type === 'AVAILABILITY_RULE_WINDOW')).toBe(false);
+  });
+});
+
+describe('SchedulingService — coverage', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('computes required vs filled headcount and shortfall', async () => {
+    const { prisma, shift } = createDeps();
+    shift.findMany.mockResolvedValue([
+      {
+        id: 's1',
+        requirements: [{ id: 'r1', headcount: 2 }, { id: 'r2', headcount: 1 }],
+        assignments: [
+          { id: 'a1', status: 'scheduled' },
+          { id: 'a2', status: 'confirmed' },
+        ],
+      },
+      {
+        id: 's2',
+        requirements: [{ id: 'r3', headcount: 1 }],
+        assignments: [],
+      },
+    ]);
+
+    const service = new SchedulingService(prisma, companyWideScopeFilter());
+    const result = await service.coverage('c1', ['s1', 's2'], 'm1');
+
+    expect(result).toEqual([
+      expect.objectContaining({ shiftId: 's1', headcountRequired: 3, headcountFilled: 2, shortfall: 1, covered: false }),
+      expect.objectContaining({ shiftId: 's2', headcountRequired: 1, headcountFilled: 0, shortfall: 1, covered: false }),
+    ]);
   });
 });

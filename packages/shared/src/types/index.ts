@@ -221,6 +221,73 @@ export interface ShiftConflictOverride {
   metadata?: Record<string, unknown>;
 }
 
+export interface Schedule {
+  id: UUID;
+  companyId: UUID;
+  branchId?: UUID;
+  name: string;
+  periodStart: ISODateString;
+  periodEnd: ISODateString;
+  status: ScheduleStatus;
+  createdById: UUID;
+  publishedAt?: ISODateString;
+  lockedAt?: ISODateString;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface ScheduleVersion {
+  id: UUID;
+  scheduleId: UUID;
+  versionNumber: number;
+  snapshotJson: Record<string, unknown>;
+  publishedById: UUID;
+  publishedBy?: { id: UUID; name: string; email: string };
+  publishedAt: ISODateString;
+  notes?: string;
+}
+
+export interface AvailabilityRule {
+  id: UUID;
+  employeeId: UUID;
+  companyId: UUID;
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  isAvailable: boolean;
+  effectiveFrom: ISODateString;
+  effectiveTo?: ISODateString | null;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface AvailabilityException {
+  id: UUID;
+  employeeId: UUID;
+  companyId: UUID;
+  date: ISODateString;
+  isAvailable: boolean;
+  startTime?: string | null;
+  endTime?: string | null;
+  reason?: string | null;
+  createdAt: ISODateString;
+}
+
+export interface ShiftCoverage {
+  shiftId: UUID;
+  headcountRequired: number;
+  headcountFilled: number;
+  shortfall: number;
+  covered: boolean;
+  overstaffed: boolean;
+}
+
+export interface SchedulePublishResult {
+  success: boolean;
+  versionNumber: number;
+  publishedAt: ISODateString;
+}
+
 export interface OptimizationRequest {
   id: UUID;
   companyId: UUID;

@@ -70,6 +70,9 @@ const PERMISSIONS: { action: string; resource: string; description: string }[] =
   { action: 'schedule.override_lock', resource: 'schedule', description: 'Override locked schedules' },
   { action: 'shift.assign', resource: 'schedule', description: 'Assign employees to shifts' },
   { action: 'shift.conflict_override', resource: 'schedule', description: 'Override scheduling conflicts' },
+  // Availability
+  { action: 'availability.read', resource: 'availability', description: 'View availability' },
+  { action: 'availability.manage', resource: 'availability', description: 'Manage availability rules and exceptions' },
   // Attendance
   { action: 'attendance.read', resource: 'attendance', description: 'View attendance records' },
   { action: 'attendance.correct', resource: 'attendance', description: 'Correct attendance records' },

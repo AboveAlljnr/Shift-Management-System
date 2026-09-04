@@ -21,6 +21,7 @@ import { AttendanceModule } from './modules/attendance/attendance.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AuthorizationModule } from './modules/authorization/authorization.module';
+import { AvailabilityModule } from './modules/availability/availability.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { CompanyModule } from './modules/company/company.module';
 import { DocumentsModule } from './modules/documents/documents.module';
@@ -68,6 +69,7 @@ import { SuperAdminModule } from './modules/super-admin/super-admin.module';
     // Domain modules
     AuthModule,
     AuthorizationModule,
+    AvailabilityModule,
     CompanyModule,
     OrganizationModule,
     EmployeeModule,
