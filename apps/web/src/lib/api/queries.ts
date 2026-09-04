@@ -195,6 +195,68 @@ export function validateAssignment(shiftId: string, employeeId: string): Promise
   return postData(`/shifts/${shiftId}/validate-assignment`, { employeeId });
 }
 
+// ---- Schedule optimization (Generate Suggested Schedule) ----
+
+export interface SuggestConflict {
+  type: string;
+  severity: 'WARNING' | 'BLOCKING';
+  ruleIdentifier: string;
+  message: string;
+  overrideAllowed: boolean;
+}
+
+export interface SuggestedAssignment {
+  shiftId: string;
+  employeeId: string;
+  blocking: SuggestConflict[];
+  warnings: SuggestConflict[];
+}
+
+export interface ScheduleSuggestion {
+  status: string;
+  shiftsConsidered: number;
+  suggestedCount: number;
+  unfilledShifts: string[];
+  droppedBlocking: number;
+  solverTimeSeconds: number;
+  objectiveValue?: number;
+  assignments: SuggestedAssignment[];
+}
+
+export interface OptimizeCriteria {
+  branchId: string;
+  departmentId?: string;
+  teamId?: string;
+  startDate: string;
+  endDate: string;
+}
+
+export interface ApplySuggestionsResult {
+  accepted: SuggestedAssignment[];
+  skipped: { shiftId: string; employeeId: string; reason: string }[];
+  rejected: { shiftId: string; employeeId: string; conflicts: SuggestConflict[] }[];
+}
+
+export function generateScheduleSuggestions(criteria: OptimizeCriteria): Promise<ScheduleSuggestion> {
+  return postData<ScheduleSuggestion>('/shifts/optimize', {
+    ...criteria,
+    startDate: new Date(criteria.startDate).toISOString(),
+    endDate: new Date(criteria.endDate).toISOString(),
+  });
+}
+
+export function applyScheduleSuggestions(
+  criteria: OptimizeCriteria,
+  assignments: { shiftId: string; employeeId: string }[],
+): Promise<ApplySuggestionsResult> {
+  return postData<ApplySuggestionsResult>('/shifts/optimize/apply', {
+    branchId: criteria.branchId,
+    startDate: new Date(criteria.startDate).toISOString(),
+    endDate: new Date(criteria.endDate).toISOString(),
+    assignments,
+  });
+}
+
 // ---- Attendance ----
 
 export interface ClockEventPayload {

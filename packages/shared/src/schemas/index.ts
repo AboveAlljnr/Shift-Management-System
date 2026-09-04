@@ -127,6 +127,29 @@ export const RequestOptimizationSchema = z.object({
   idempotencyKey: z.string().uuid(),
 });
 
+// ---- Schedule optimization (Generate Suggested Schedule) ----
+export const OptimizeScheduleSchema = z.object({
+  branchId: z.string().uuid(),
+  departmentId: z.string().uuid().optional(),
+  teamId: z.string().uuid().optional(),
+  startDate: z.string().datetime(),
+  endDate: z.string().datetime(),
+});
+
+export const OptimizeApplySchema = z.object({
+  branchId: z.string().uuid(),
+  startDate: z.string().datetime(),
+  endDate: z.string().datetime(),
+  assignments: z
+    .array(
+      z.object({
+        shiftId: z.string().uuid(),
+        employeeId: z.string().uuid(),
+      }),
+    )
+    .min(1),
+});
+
 // ---- Pagination schema ----
 export const PaginationQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -152,4 +175,6 @@ export type AttendanceCorrectionDto = z.infer<typeof AttendanceCorrectionSchema>
 export type CreateLeaveRequestDto = z.infer<typeof CreateLeaveRequestSchema>;
 export type ReviewLeaveDto = z.infer<typeof ReviewLeaveSchema>;
 export type RequestOptimizationDto = z.infer<typeof RequestOptimizationSchema>;
+export type OptimizeScheduleDto = z.infer<typeof OptimizeScheduleSchema>;
+export type OptimizeApplyDto = z.infer<typeof OptimizeApplySchema>;
 export type PaginationQueryDto = z.infer<typeof PaginationQuerySchema>;

@@ -31,6 +31,13 @@ const common = z.object({
   REDIS_URL: redisUrl.default('redis://localhost:6379'),
   // CORS: comma-separated list of allowed browser origins. Empty list === deny all origins.
   ALLOWED_ORIGINS: z.string().default(''),
+  // Schedule-optimizer microservice base URL (the Python OR-Tools service).
+  // The API only dials it when Generate Suggested Schedule is invoked, so it is safe to
+  // default locally; production wiring must point at the real optimizer service.
+  OPTIMIZER_URL: z
+    .string()
+    .url('OPTIMIZER_URL must be a valid http(s) URL')
+    .default('http://localhost:8000'),
   // Startup DB-connect resilience (HIGH #5). Operational tuning, optional; bounded & clamped
   // by the retrier so a typo cannot cause an unbounded retry loop.
   DB_CONNECT_MAX_RETRIES: z.coerce.number().int().min(1).max(60).optional(),

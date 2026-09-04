@@ -10,6 +10,7 @@ import { validateEnv } from './config/env.validation';
 import { HealthModule } from './health/health.module';
 // Infrastructure
 import { DatabaseModule } from './infrastructure/database/database.module';
+import { OptimizerModule } from './infrastructure/optimizer/optimizer.module';
 import { QueueModule } from './infrastructure/queue/queue.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
 import { StorageModule } from './infrastructure/storage/storage.module';
@@ -58,6 +59,7 @@ import { SuperAdminModule } from './modules/super-admin/super-admin.module';
     DatabaseModule,
     RedisModule,
     StorageModule,
+    OptimizerModule,
     QueueModule,
 
     // Cross-cutting (structured logging / correlation id)

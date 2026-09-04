@@ -10,12 +10,16 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import {
   AssignShiftSchema,
   CreateShiftSchema,
+  OptimizeApplySchema,
+  OptimizeScheduleSchema,
   ShiftConflictOverrideSchema,
 } from '@sms/shared';
 import type {
   CreateShiftDto,
   AssignShiftDto,
   ShiftConflictOverrideDto,
+  OptimizeApplyDto,
+  OptimizeScheduleDto,
   User,
 } from '@sms/shared';
 
@@ -73,6 +77,33 @@ export class SchedulingController {
     @Body(new ZodValidationPipe(CreateShiftSchema)) dto: CreateShiftDto,
   ) {
     return this.schedulingService.create(companyId, dto);
+  }
+
+  @Post('optimize')
+  @RequiredPermission('schedule.create')
+  @ApiOperation({ summary: 'Generate suggested schedule via the optimizer (review-first, no writes' })
+  async optimize(
+    @CompanyId() companyId: string,
+    @Body(new ZodValidationPipe(OptimizeScheduleSchema)) dto: OptimizeScheduleDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.schedulingService.generateSuggestions(
+      companyId,
+      dto,
+      user.id,
+      user.membershipId ?? '',
+    );
+  }
+
+  @Post('optimize/apply')
+  @RequiredPermission('schedule.create')
+  @ApiOperation({ summary: 'Apply previously proposed schedule suggestions (transactional revalidation)' })
+  async optimizeApply(
+    @CompanyId() companyId: string,
+    @Body(new ZodValidationPipe(OptimizeApplySchema)) dto: OptimizeApplyDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.schedulingService.applySuggestions(companyId, dto, user.id);
   }
 
   @Post(':id/validate-assignment')

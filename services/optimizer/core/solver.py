@@ -40,6 +40,18 @@ def _shifts_overlap(a: ShiftRequirement, b: ShiftRequirement) -> bool:
     return a_start < b_end and b_start < a_end
 
 
+def _rest_violation(a: ShiftRequirement, b: ShiftRequirement, min_rest_hours: float) -> bool:
+    """True if the gap between two non-overlapping shifts is less than min_rest_hours."""
+    a_start = datetime.fromisoformat(a.start_time.replace("Z", "+00:00"))
+    a_end = datetime.fromisoformat(a.end_time.replace("Z", "+00:00"))
+    b_start = datetime.fromisoformat(b.start_time.replace("Z", "+00:00"))
+    b_end = datetime.fromisoformat(b.end_time.replace("Z", "+00:00"))
+    if _shifts_overlap(a, b):
+        return False
+    gap = min(b_start - a_end, a_start - b_end)
+    return gap.total_seconds() / 3600 < min_rest_hours
+
+
 def solve(request: OptimizationRequest) -> OptimizationResponse:
     t_start = time.perf_counter()
 
@@ -74,6 +86,16 @@ def solve(request: OptimizationRequest) -> OptimizationResponse:
                 if (i1, j) in x and (i2, j) in x:
                     if _shifts_overlap(shifts[i1], shifts[i2]):
                         model.add(x[(i1, j)] + x[(i2, j)] <= 1)
+
+    # --- Hard constraint 1b: Minimum rest between consecutive shifts ---
+    min_rest_hours = request.min_rest_hours or 0.0
+    if min_rest_hours > 0:
+        for j in range(len(employees)):
+            for i1 in range(len(shifts)):
+                for i2 in range(i1 + 1, len(shifts)):
+                    if (i1, j) in x and (i2, j) in x:
+                        if _rest_violation(shifts[i1], shifts[i2], min_rest_hours):
+                            model.add(x[(i1, j)] + x[(i2, j)] <= 1)
 
     # --- Hard constraint 2: Weekly hours bounds ---
     SCALE = 100  # use integers (hours * 100)

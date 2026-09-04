@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import {
   Injectable,
   NotFoundException,
@@ -7,9 +9,12 @@ import type {
   CreateShiftDto,
   AssignShiftDto,
   ShiftConflictOverrideDto,
+  OptimizeScheduleDto,
+  OptimizeApplyDto,
 } from '@sms/shared';
 
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+import { OptimizerClient } from '../../infrastructure/optimizer/optimizer.client';
 import { ScopeFilterService } from '../authorization/scope-filter.service';
 
 export interface Conflict {
@@ -30,11 +35,32 @@ export interface ScheduleValidationResult {
   warnings: Conflict[];
 }
 
+export interface SuggestionAssignment {
+  shiftId: string;
+  employeeId: string;
+  blocking: Conflict[];
+  warnings: Conflict[];
+}
+
+export interface ScheduleSuggestion {
+  status: string;
+  shiftsConsidered: number;
+  suggestedCount: number;
+  unfilledShifts: string[];
+  droppedBlocking: number;
+  solverTimeSeconds: number;
+  objectiveValue?: number;
+  assignments: SuggestionAssignment[];
+}
+
+const MIN_REST_HOURS = 11;
+
 @Injectable()
 export class SchedulingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly scopeFilter: ScopeFilterService,
+    private readonly optimizer: OptimizerClient,
   ) {}
 
   async findAll(
@@ -523,5 +549,326 @@ export class SchedulingService {
 
       return { success: true, versionNumber: nextVersionNumber };
     });
+  }
+
+  /**
+   * Generate Suggested Schedule (Hackathon).
+   *
+   * The optimizer microservice is a PROPOSER only. This method:
+   *  1. Loads in-scope shifts + candidate employees (ADR-003 scoped).
+   *  2. Computes authoritative per-employee availability: a shift is only offered
+   *     to an employee when it does not clash with an approved leave, an existing
+   *     (non-cancelled) assignment, a prior assignment in the same window, or a
+   *     minimum-rest violation against existing assignments.
+   *  3. Sends the deterministic request to the optimizer and revalidates every
+   *     proposed pair through the authoritative conflict engine, dropping any that
+   *     still carry a BLOCKING conflict.
+   *  4. Persists an OptimizationRequest audit record (interactive path).
+   *
+   * Nothing is written to the production schedule tables here; suggestions must be
+   * explicitly applied via `applySuggestions` (review-first).
+   */
+  async generateSuggestions(
+    companyId: string,
+    dto: OptimizeScheduleDto,
+    userId: string,
+    membershipId: string,
+  ): Promise<ScheduleSuggestion> {
+    const idempotencyKey = randomUUID();
+
+    const queryScope = await this.scopeFilter.shiftQueryScope(membershipId, companyId);
+    const shiftWhere: Record<string, any> = {
+      companyId,
+      branchId: dto.branchId,
+      status: { not: 'cancelled' },
+      startAt: {},
+    };
+    if (queryScope.shiftWhere) shiftWhere.AND = [queryScope.shiftWhere];
+    if (dto.departmentId) shiftWhere.departmentId = dto.departmentId;
+    if (dto.teamId) shiftWhere.teamId = dto.teamId;
+    if (dto.startDate) shiftWhere.startAt.gte = new Date(dto.startDate);
+    if (dto.endDate) shiftWhere.startAt.lte = new Date(dto.endDate);
+
+    const shifts = await this.prisma.shift.findMany({
+      where: shiftWhere,
+      include: { requirements: true, assignments: true },
+      orderBy: { startAt: 'asc' },
+    });
+
+    if (shifts.length === 0) {
+      return {
+        status: 'no_shifts',
+        shiftsConsidered: 0,
+        suggestedCount: 0,
+        unfilledShifts: [],
+        droppedBlocking: 0,
+        solverTimeSeconds: 0,
+        assignments: [],
+      };
+    }
+
+    const employeeWhere = await this.scopeFilter.employeeWhere(membershipId, companyId);
+    const employees = await this.prisma.employee.findMany({
+      where: {
+        companyId,
+        status: 'active',
+        ...(employeeWhere ?? {}),
+      },
+    });
+
+    const windowStart = new Date(dto.startDate);
+    const windowEnd = new Date(dto.endDate);
+    const employeeIds = employees.map((e) => e.id);
+
+    // Authoritative conflict lookups for the whole window.
+    const [approvedLeaves, existingAssignments] = await Promise.all([
+      employeeIds.length
+        ? this.prisma.leaveRequest.findMany({
+            where: {
+              companyId,
+              status: 'approved',
+              employeeId: { in: employeeIds },
+              startDate: { lte: windowEnd },
+              endDate: { gte: windowStart },
+            },
+          })
+        : Promise.resolve([]),
+      shifts.length
+        ? this.prisma.shiftAssignment.findMany({
+            where: {
+              shiftId: { in: shifts.map((s) => s.id) },
+              status: { not: 'cancelled' },
+            },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const availability = this.buildAvailability(
+      shifts,
+      employees,
+      approvedLeaves,
+      existingAssignments,
+    );
+
+    const request = {
+      tenant_id: companyId,
+      week_start: dto.startDate.slice(0, 10),
+      shifts: shifts.map((s) => ({
+        shift_id: s.id,
+        start_time: s.startAt.toISOString(),
+        end_time: s.endAt.toISOString(),
+        required_count:
+          s.requirements.length > 0
+            ? s.requirements.reduce((sum, r) => sum + r.headcount, 0)
+            : 1,
+        department_id: s.departmentId ?? undefined,
+      })),
+      employees: employees.map((e) => ({
+        employee_id: e.id,
+        available_shift_ids: availability.get(e.id) ?? [],
+        max_hours_per_week: 40,
+        min_hours_per_week: 0,
+      })),
+      max_solver_time_seconds: 30,
+      min_rest_hours: MIN_REST_HOURS,
+    };
+
+    const optimizerResult = await this.optimizer.optimize(request);
+
+    // Revalidate every proposed pair against the authoritative engine; block unsafe ones.
+    const assignments: SuggestionAssignment[] = [];
+    let droppedBlocking = 0;
+    for (const a of optimizerResult.assignments) {
+      const validation = await this.validateAssignment(companyId, a.shift_id, a.employee_id);
+      const blocking = validation.conflicts;
+      if (blocking.length > 0) {
+        droppedBlocking += 1;
+        continue;
+      }
+      assignments.push({
+        shiftId: a.shift_id,
+        employeeId: a.employee_id,
+        blocking: [],
+        warnings: validation.warnings,
+      });
+    }
+
+    const suggestedShiftIds = new Set(assignments.map((a) => a.shiftId));
+    const unfilledShifts = shifts
+      .map((s) => s.id)
+      .filter((id) => !suggestedShiftIds.has(id));
+
+    const suggestion: ScheduleSuggestion = {
+      status: optimizerResult.status,
+      shiftsConsidered: shifts.length,
+      suggestedCount: assignments.length,
+      unfilledShifts,
+      droppedBlocking,
+      solverTimeSeconds: optimizerResult.solver_time_seconds,
+      objectiveValue: optimizerResult.objective_value,
+      assignments,
+    };
+
+    await this.prisma.optimizationRequest.create({
+      data: {
+        companyId,
+        requestedById: userId,
+        parameters: JSON.parse(JSON.stringify(request)),
+        status: 'completed',
+        path: 'interactive',
+        idempotencyKey,
+        resultJson: JSON.parse(JSON.stringify(suggestion)),
+        completedAt: new Date(),
+      },
+    });
+
+    return suggestion;
+  }
+
+  /**
+   * Apply Suggested Schedule (review-first, transactional).
+   *
+   * Each proposed pair is revalidated through the authoritative engine at apply time.
+   * Pairs with BLOCKING conflicts are skipped (never silently overwritten); pairs that
+   * already exist are reported as skipped. Only clean pairs are written, all within a
+   * single transaction so a partial failure cannot leave a half-applied schedule.
+   */
+  async applySuggestions(
+    companyId: string,
+    dto: OptimizeApplyDto,
+    userId: string,
+  ) {
+    const result = {
+      accepted: [] as SuggestionAssignment[],
+      skipped: [] as { shiftId: string; employeeId: string; reason: string }[],
+      rejected: [] as { shiftId: string; employeeId: string; conflicts: Conflict[] }[],
+    };
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const pair of dto.assignments) {
+        const exists = await tx.shiftAssignment.findFirst({
+          where: {
+            shiftId: pair.shiftId,
+            employeeId: pair.employeeId,
+            status: { not: 'cancelled' },
+          },
+        });
+
+        if (exists) {
+          result.skipped.push({ ...pair, reason: 'already_assigned' });
+          continue;
+        }
+
+        const validation = await this.validateAssignment(companyId, pair.shiftId, pair.employeeId);
+        const blocking = validation.conflicts;
+        if (blocking.length > 0) {
+          result.rejected.push({ ...pair, conflicts: blocking });
+          continue;
+        }
+
+        await tx.shiftAssignment.create({
+          data: {
+            shiftId: pair.shiftId,
+            employeeId: pair.employeeId,
+            status: 'scheduled',
+            notes: 'Applied from suggested schedule',
+          },
+        });
+
+        result.accepted.push({
+          shiftId: pair.shiftId,
+          employeeId: pair.employeeId,
+          blocking: [],
+          warnings: validation.warnings,
+        });
+      }
+    });
+
+    // Auditability: record the apply action (interactive optimization path) so the
+    // outcome of a bulk apply is always traceable to the requesting user.
+    await this.prisma.optimizationRequest.create({
+      data: {
+        companyId,
+        requestedById: userId,
+        parameters: JSON.parse(JSON.stringify(dto)),
+        status: 'completed',
+        path: 'interactive',
+        idempotencyKey: randomUUID(),
+        resultJson: JSON.parse(JSON.stringify(result)),
+        completedAt: new Date(),
+      },
+    });
+
+    return result;
+  }
+
+  /**
+   * Build the deterministic availability map used to constrain the optimizer.
+   * A shift is offered to an employee only when it introduces no BLOCKING conflict
+   * and does not violate the minimum rest period against an existing assignment.
+   */
+  private buildAvailability(
+    shifts: Array<{
+      id: string;
+      startAt: Date;
+      endAt: Date;
+      status: string;
+    }>,
+    employees: Array<{ id: string; status: string }>,
+    approvedLeaves: Array<{
+      employeeId: string;
+      startDate: Date;
+      endDate: Date;
+      status: string;
+    }>,
+    existingAssignments: Array<{
+      shiftId: string;
+      employeeId: string;
+      status: string;
+    }>,
+  ): Map<string, string[]> {
+    const map = new Map<string, string[]>();
+
+    for (const employee of employees) {
+      if (employee.status !== 'active') continue;
+      const employeeAssignments = existingAssignments.filter((a) => a.employeeId === employee.id);
+      const assignedShiftIds = new Set(employeeAssignments.map((a) => a.shiftId));
+
+      const available: string[] = [];
+      for (const shift of shifts) {
+        if (shift.status === 'cancelled') continue;
+        if (assignedShiftIds.has(shift.id)) continue;
+
+        const onLeave = approvedLeaves.some(
+          (l) =>
+            l.employeeId === employee.id &&
+            l.startDate <= shift.endAt &&
+            l.endDate >= shift.startAt,
+        );
+        if (onLeave) continue;
+
+        const overlapsExisting = employeeAssignments.some((a) => {
+          const ex = shifts.find((s) => s.id === a.shiftId);
+          return ex && ex.startAt < shift.endAt && ex.endAt > shift.startAt;
+        });
+        if (overlapsExisting) continue;
+
+        const violatesMinRest = employeeAssignments.some((a) => {
+          const ex = shifts.find((s) => s.id === a.shiftId);
+          if (!ex) return false;
+          const gapHours =
+            shift.startAt >= ex.endAt
+              ? (shift.startAt.getTime() - ex.endAt.getTime()) / 3_600_000
+              : (ex.startAt.getTime() - shift.endAt.getTime()) / 3_600_000;
+          return gapHours < MIN_REST_HOURS;
+        });
+        if (violatesMinRest) continue;
+
+        available.push(shift.id);
+      }
+      map.set(employee.id, available);
+    }
+
+    return map;
   }
 }

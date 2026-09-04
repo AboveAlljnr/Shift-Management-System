@@ -7,13 +7,17 @@ import { useState, type FormEvent } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
+  applyScheduleSuggestions,
   assignEmployeeToShift,
   createShift,
   fetchBranches,
   fetchDepartments,
   fetchEmployees,
   fetchShifts,
+  generateScheduleSuggestions,
+  type ScheduleSuggestion,
   type ShiftDetail,
+  type SuggestedAssignment,
 } from '@/lib/api/queries';
 import { cn, formatTime } from '@/lib/utils';
 import { format, parseISO } from 'date-fns';
@@ -50,6 +54,7 @@ export default function SchedulePage() {
   const { data: employees } = useQuery({ queryKey: ['employees'], queryFn: () => fetchEmployees({ limit: 100 }) });
 
   const [showCreate, setShowCreate] = useState(false);
+  const [showGenerate, setShowGenerate] = useState(false);
   const [form, setForm] = useState({
     name: '',
     branchId: '',
@@ -98,6 +103,12 @@ export default function SchedulePage() {
           <h1 className="text-2xl font-bold tracking-tight">Schedule</h1>
           <p className="text-sm text-muted-foreground">{(shifts ?? []).length} shifts · create, assign, and track</p>
         </div>
+        <button
+          onClick={() => setShowGenerate(true)}
+          className="rounded-md border border-border px-4 py-2 text-sm font-semibold text-muted-foreground transition-colors hover:bg-muted"
+        >
+          Generate suggested schedule
+        </button>
         <button
           onClick={() => setShowCreate(true)}
           className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
@@ -245,6 +256,272 @@ export default function SchedulePage() {
           </div>
         </div>
       )}
+
+      {showGenerate && (
+        <GenerateSuggestionsDialog
+          branches={branches ?? []}
+          departments={departments ?? []}
+          employees={employees?.data ?? []}
+          shifts={shifts ?? []}
+          onClose={() => setShowGenerate(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+interface BranchItem {
+  id: string;
+  name: string;
+}
+
+interface DepartmentItem {
+  id: string;
+  name: string;
+}
+
+interface EmployeeItem {
+  id: string;
+  firstName: string;
+  lastName: string;
+}
+
+function GenerateSuggestionsDialog({
+  branches,
+  departments,
+  employees,
+  shifts,
+  onClose,
+}: {
+  branches: BranchItem[];
+  departments: DepartmentItem[];
+  employees: EmployeeItem[];
+  shifts: ShiftDetail[];
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [branchId, setBranchId] = useState('');
+  const [departmentId, setDepartmentId] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [suggestion, setSuggestion] = useState<ScheduleSuggestion | null>(null);
+  const [applyMsg, setApplyMsg] = useState<string | null>(null);
+
+  const employeeName = (id: string) => {
+    const e = employees.find((x) => x.id === id);
+    return e ? `${e.firstName} ${e.lastName}` : 'Unknown';
+  };
+  const shiftName = (id: string) => shifts.find((s) => s.id === id)?.name ?? 'Unknown shift';
+
+  const generate = useMutation({
+    mutationFn: () =>
+      generateScheduleSuggestions({
+        branchId,
+        departmentId: departmentId || undefined,
+        startDate,
+        endDate,
+      }),
+    onSuccess: (data) => {
+      setSuggestion(data);
+      setError(null);
+      setApplyMsg(null);
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : 'Unable to generate suggestions'),
+  });
+
+  const apply = useMutation({
+    mutationFn: () =>
+      applyScheduleSuggestions(
+        { branchId, startDate, endDate },
+        (suggestion?.assignments ?? []).map((a) => ({ shiftId: a.shiftId, employeeId: a.employeeId })),
+      ),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
+      setApplyMsg(
+        `${data.accepted.length} applied · ${data.skipped.length} already assigned · ${data.rejected.length} rejected due to conflicts`,
+      );
+      setSuggestion(null);
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : 'Unable to apply suggestions'),
+  });
+
+  function handleGenerate(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSuggestion(null);
+    setApplyMsg(null);
+    if (!branchId) return setError('Branch is required');
+    if (!startDate || !endDate) return setError('Start and end dates are required');
+    if (new Date(endDate) < new Date(startDate)) return setError('End date must be on or after start date');
+    setError(null);
+    generate.mutate();
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg border border-border bg-card shadow-lg">
+        <div className="border-b border-border p-5">
+          <h2 className="text-lg font-semibold">Generate suggested schedule</h2>
+          <p className="text-sm text-muted-foreground">
+            The optimizer proposes assignments. Review before applying — nothing is written until you confirm.
+          </p>
+        </div>
+
+        <div className="space-y-4 overflow-y-auto p-5">
+          {!suggestion ? (
+            <form onSubmit={handleGenerate} className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">
+                    Branch <span className="text-destructive">*</span>
+                  </label>
+                  <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className={inputClass}>
+                    <option value="">Select…</option>
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Department (optional)</label>
+                  <select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} className={inputClass}>
+                    <option value="">All departments</option>
+                    {departments.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">
+                    Start date <span className="text-destructive">*</span>
+                  </label>
+                  <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={inputClass} />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">
+                    End date <span className="text-destructive">*</span>
+                  </label>
+                  <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className={inputClass} />
+                </div>
+              </div>
+
+              {error && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  {error}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-3 border-t border-border pt-4">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded-md border border-border px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={generate.isPending}
+                  className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-60"
+                >
+                  {generate.isPending ? 'Building your suggested schedule…' : 'Generate suggestions'}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-4">
+                <Metric label="Shifts considered" value={String(suggestion.shiftsConsidered)} />
+                <Metric label="Suggested" value={String(suggestion.suggestedCount)} />
+                <Metric label="Unfilled" value={String(suggestion.unfilledShifts.length)} />
+                <Metric label="Hard conflicts dropped" value={String(suggestion.droppedBlocking)} />
+              </div>
+
+              {suggestion.suggestedCount === 0 ? (
+                <p className="rounded-md border border-amber-300/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+                  No suggestions were produced. Adjust the range or check employee availability and approved leave.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Proposed assignments</p>
+                  {Array.from(
+                    suggestion.assignments.reduce((map, a) => {
+                      const list = map.get(a.shiftId) ?? [];
+                      list.push(a);
+                      map.set(a.shiftId, list);
+                      return map;
+                    }, new Map<string, SuggestedAssignment[]>()),
+                  ).map(([shiftId, list]) => (
+                    <div key={shiftId} className="flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-2">
+                      <span className="text-sm font-medium">{shiftName(shiftId)}</span>
+                      <div className="flex flex-wrap gap-1">
+                        {list.map((a) => (
+                          <span key={a.employeeId} className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs">
+                            {employeeName(a.employeeId)}
+                            {a.warnings.length > 0 && <span className="font-bold text-amber-600" title={a.warnings.map((w) => w.message).join('; ')}>
+                              !
+                            </span>}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {applyMsg && (
+                <div className="rounded-md border border-emerald-300/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700">
+                  {applyMsg}
+                </div>
+              )}
+              {apply.isError && error && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  {error}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-3 border-t border-border pt-4">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded-md border border-border px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSuggestion(null)}
+                  className="rounded-md border border-border px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted"
+                >
+                  Regenerate
+                </button>
+                <button
+                  type="button"
+                  onClick={() => apply.mutate()}
+                  disabled={apply.isPending || suggestion.suggestedCount === 0}
+                  className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-60"
+                >
+                  {apply.isPending ? 'Applying…' : 'Apply suggestions'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border px-3 py-2">
+      <p className="text-2xl font-bold">{value}</p>
+      <p className="text-xs text-muted-foreground">{label}</p>
     </div>
   );
 }
@@ -258,8 +535,7 @@ function ShiftCard({
   employees: { id: string; firstName: string; lastName: string }[];
   departments: { id: string; name: string }[];
 }) {
-  const queryClient = useQueryClient();
-  const [assigning, setAssigning] = useState(false);
+  const queryClient = useQueryClient();  const [assigning, setAssigning] = useState(false);
   const [employeeId, setEmployeeId] = useState('');
   const [result, setResult] = useState<{ message?: string; conflicts?: ConflictItem[]; warnings?: ConflictItem[] } | null>(null);
 

@@ -28,6 +28,8 @@ class OptimizationRequest(BaseModel):
     shifts: list[ShiftRequirement]
     employees: list[EmployeeAvailability]
     max_solver_time_seconds: int = Field(default=30, ge=1, le=120)
+    min_rest_hours: float = Field(default=0.0, ge=0)
+    """Minimum rest (hours) required between any two shifts assigned to the same employee."""
 
 
 class AssignmentResult(BaseModel):
