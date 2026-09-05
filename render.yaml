@@ -31,6 +31,9 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.10
 
   # ============================================================
   # 3. NESTJS REST API (Core Modular Monolith)
@@ -40,10 +43,12 @@ services:
     runtime: node
     plan: free
     region: oregon
-    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @sms/shared build && pnpm --filter @sms/api exec prisma generate && pnpm --filter @sms/api build
+    buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --filter @sms/shared build && pnpm --filter @sms/api exec prisma generate && pnpm --filter @sms/api build
     startCommand: pnpm --filter @sms/api exec prisma migrate deploy && node apps/api/dist/main
     healthCheckPath: /api/v1/health/live
     envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
       - key: NODE_ENV
         value: production
       - key: APP_PORT
@@ -80,10 +85,12 @@ services:
     runtime: node
     plan: free
     region: oregon
-    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @sms/shared build && pnpm --filter @sms/web build
+    buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --filter @sms/shared build && pnpm --filter @sms/web build
     startCommand: node apps/web/.next/standalone/apps/web/server.js
     healthCheckPath: /login
     envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
       - key: NODE_ENV
         value: production
       - key: NEXT_PUBLIC_API_URL
