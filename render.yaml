@@ -86,9 +86,13 @@ services:
     plan: free
     region: oregon
     buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --filter @sms/shared build && pnpm --filter @sms/web build
-    startCommand: pnpm --filter @sms/web start
+    startCommand: node apps/web/.next/standalone/apps/web/server.js
     healthCheckPath: /login
     envVars:
+      - key: HOSTNAME
+        value: 0.0.0.0
+      - key: PORT
+        value: 10000
       - key: NODE_VERSION
         value: 20.18.0
       - key: NODE_ENV
