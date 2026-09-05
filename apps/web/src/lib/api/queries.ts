@@ -825,3 +825,38 @@ export function markNotificationRead(id: string): Promise<Notification> {
 export function markAllNotificationsRead(): Promise<{ count: number }> {
   return patchData<{ count: number }>('/notifications/mark-all-read', {});
 }
+
+// ---- Audit log ----
+
+export interface AuditLogEntry {
+  id: string;
+  actorId?: string | null;
+  actorEmail?: string | null;
+  action: string;
+  resource: string;
+  resourceId?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  occurredAt: string;
+}
+
+export interface AuditLogPage {
+  items: AuditLogEntry[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export function fetchAuditLogs(params?: {
+  resource?: string;
+  action?: string;
+  page?: number;
+  limit?: number;
+}): Promise<AuditLogPage> {
+  return getData<AuditLogPage>('/audit', {
+    ...(params?.resource ? { resource: params.resource } : {}),
+    ...(params?.action ? { action: params.action } : {}),
+    ...(params?.page ? { page: params.page } : {}),
+    ...(params?.limit ? { limit: params.limit } : {}),
+  });
+}

@@ -37,6 +37,19 @@ const inputClass =
   'w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand transition';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]; // Monday-first, mapping to dayOfWeek (0=Sunday)
+
+function startOfWeekMonday(d: Date): Date {
+  const x = new Date(d);
+  const day = (x.getDay() + 6) % 7;
+  x.setDate(x.getDate() - day);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function toISODate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
 
 export default function AvailabilityPage() {
   const queryClient = useQueryClient();
@@ -228,6 +241,113 @@ export default function AvailabilityPage() {
           {formError}
         </div>
       )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="font-sans">This week</CardTitle>
+          <CardDescription>
+            {isManager && !effectiveEmployeeId
+              ? 'Availability coverage across all employees'
+              : `${employeeName(effectiveEmployeeId ?? '')} — repeats every week`}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {rules.isLoading ? (
+            <div className="grid gap-2 sm:grid-cols-7">
+              {Array.from({ length: 7 }).map((_, i) => (
+                <div key={i} className="h-24 animate-pulse rounded-xl bg-slate-200/60" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+              {WEEK_ORDER.map((dow) => {
+                const dayRules = ruleList.filter((r) => r.dayOfWeek === dow);
+                const available = dayRules.filter((r) => r.isAvailable);
+                const unavailable = dayRules.filter((r) => !r.isAvailable);
+                const scopeRules = effectiveEmployeeId
+                  ? dayRules.filter((r) => r.employeeId === effectiveEmployeeId)
+                  : dayRules;
+
+                const weekDate = new Date(startOfWeekMonday(new Date()));
+                weekDate.setDate(weekDate.getDate() + WEEK_ORDER.indexOf(dow));
+                const dateISO = toISODate(weekDate);
+                const scopeExceptions = effectiveEmployeeId
+                  ? exceptionList.filter((ex) => ex.employeeId === effectiveEmployeeId && ex.date.slice(0, 10) === dateISO)
+                  : [];
+
+                const employeeScope = !!effectiveEmployeeId;
+                const hasRule = scopeRules.length > 0;
+                const isAvailable = scopeRules.some((r) => r.isAvailable);
+                const windowRule = [...scopeRules].sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom)).find((r) => r.isAvailable) ?? scopeRules[0];
+                const exceptionOverride = scopeExceptions[0];
+
+                const label = DAY_NAMES[dow];
+                const isToday = dateISO === toISODate(new Date());
+
+                return (
+                  <div
+                    key={dow}
+                    className={
+                      'rounded-xl border p-3 ' +
+                      (isToday
+                        ? 'border-brand/40 bg-brand-light ring-1 ring-brand/30'
+                        : exceptionOverride
+                          ? exceptionOverride.isAvailable
+                            ? 'border-emerald-200 bg-emerald-50'
+                            : 'border-red-200 bg-red-50'
+                          : employeeScope && isAvailable
+                            ? 'border-emerald-200 bg-emerald-50/50'
+                            : 'border-slate-200 bg-slate-50/60')
+                    }
+                  >
+                    <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                      {label}
+                      {isToday && <span className="ml-1 text-brand">· Today</span>}
+                    </p>
+                    {exceptionOverride ? (
+                      <div className="mt-1.5">
+                        <p className={exceptionOverride.isAvailable ? 'text-sm font-bold text-emerald-700' : 'text-sm font-bold text-red-700'}>
+                          {exceptionOverride.isAvailable ? 'Available' : 'Unavailable'}
+                        </p>
+                        {exceptionOverride.reason && <p className="text-[11px] text-slate-500">{exceptionOverride.reason}</p>}
+                      </div>
+                    ) : employeeScope ? (
+                      hasRule ? (
+                        isAvailable && windowRule ? (
+                          <div className="mt-1.5">
+                            <p className="text-sm font-bold text-emerald-700">
+                              <span className="font-mono">{windowRule.startTime}</span> – <span className="font-mono">{windowRule.endTime}</span>
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="mt-1.5 text-sm font-bold text-red-600">Unavailable</p>
+                        )
+                      ) : (
+                        <p className="mt-1.5 text-xs text-slate-400">No rule</p>
+                      )
+                    ) : (
+                      <div className="mt-1.5">
+                        {dayRules.length === 0 ? (
+                          <p className="text-xs text-slate-400">No rules</p>
+                        ) : (
+                          <div className="space-y-1">
+                            <p className="text-sm font-bold text-emerald-700">
+                              {available.length} available
+                            </p>
+                            {unavailable.length > 0 && (
+                              <p className="text-xs text-slate-500">{unavailable.length} unavailable</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

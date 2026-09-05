@@ -31,6 +31,8 @@ import { format, parseISO } from 'date-fns';
 const inputClass =
   'w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand transition';
 
+const BALANCE_COLORS = ['#3B57E8', '#16A34A', '#7C3AED', '#D97706', '#0891B2', '#DB2777'];
+
 function dayDiff(start: string, end: string): number {
   const s = new Date(start);
   const e = new Date(end);
@@ -128,21 +130,31 @@ export default function LeavePage() {
 
       {showBalances && balances && balances.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {balances.map((b) => (
-            <Card key={b.id}>
-              <CardHeader>
-                <CardTitle className="text-sm font-sans">{b.leaveType.name}</CardTitle>
-                <CardDescription>{b.year}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <p className="text-2xl font-bold">
-                  {b.remainingDays}
-                  <span className="text-sm font-normal text-slate-400"> / {b.allocatedDays} days</span>
-                </p>
-                <p className="text-xs text-slate-400">{b.usedDays} used</p>
-              </CardContent>
-            </Card>
-          ))}
+          {balances.map((b, i) => {
+            const color = BALANCE_COLORS[i % BALANCE_COLORS.length];
+            const pct = b.allocatedDays > 0 ? Math.min(100, (b.remainingDays / b.allocatedDays) * 100) : 0;
+            return (
+              <Card key={b.id} className="overflow-hidden">
+                <CardContent className="p-5">
+                  <div className="mb-3 flex items-center justify-between">
+                    <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                      {b.leaveType.name}
+                      {b.leaveType.isPaid && <span className="ml-1.5 text-[10px] font-semibold normal-case text-emerald-600">paid</span>}
+                    </p>
+                    <div className="h-2 w-2 rounded-full" style={{ background: color }} />
+                  </div>
+                  <div className="flex items-baseline gap-1">
+                    <p className="text-3xl font-bold font-sans text-slate-900">{b.remainingDays}</p>
+                    <p className="text-xs text-slate-400">/ {b.allocatedDays} days</p>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-400">{b.usedDays} used · {b.year}</p>
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                    <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
 

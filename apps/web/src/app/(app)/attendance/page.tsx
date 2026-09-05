@@ -6,6 +6,7 @@ import { useMemo, useState } from 'react';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { Avatar } from '@/components/ui/avatar';
 import { PageHeader } from '@/components/ui/page-header';
 import {
   Table,
@@ -17,16 +18,37 @@ import {
 } from '@/components/ui/table';
 import { fetchDailyAttendance, fetchEmployeeAttendance, fetchMyEmployee, fetchPresenceVerifications } from '@/lib/api/queries';
 import { getAuthUser } from '@/lib/auth';
-import { formatTime } from '@/lib/utils';
+import { cn, formatTime, getInitials } from '@/lib/utils';
 import { format, parseISO } from 'date-fns';
+
+const AVATAR_COLORS = ['#7C3AED', '#2563EB', '#DC2626', '#0891B2', '#059669', '#D97706', '#64748B', '#16A34A'];
+
+function colorFor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) % 997;
+  return AVATAR_COLORS[hash % AVATAR_COLORS.length] as string;
+}
 
 function toLocalDateInput(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+type ManagerView = 'attendance' | 'presence';
+
+const STATUS_ROW_BG: Record<string, string> = {
+  late: 'bg-amber-50/40',
+  absent: 'bg-red-50/40',
+  missing_clock_in: 'bg-red-50/40',
+  missing_clock_out: 'bg-amber-50/40',
+  on_leave: 'bg-violet-50/40',
+  holiday: 'bg-slate-50/40',
+  day_off: 'bg-slate-50/40',
+};
+
 export default function AttendancePage() {
   const [selectedDate, setSelectedDate] = useState(toLocalDateInput(new Date()));
+  const [managerView, setManagerView] = useState<ManagerView>('attendance');
   const user = getAuthUser();
   const isManager = useMemo(() => {
     if (!user) return false;
@@ -88,8 +110,37 @@ export default function AttendancePage() {
           <StatCard label="Absent / missing" value={absent} sub="Requires attention" accent="#DC2626" icon={<AlertTriangle size={16} />} />
         </div>
 
+        {isManager && (
+          <div className="flex gap-1 w-fit max-w-full rounded-xl bg-slate-100 p-1">
+            {(
+              [
+                ['attendance', 'Daily attendance', Users],
+                ['presence', 'Presence exceptions', ShieldCheck],
+              ] as const
+            ).map(([id, label, Icon]) => (
+              <button
+                key={id}
+                onClick={() => setManagerView(id)}
+                className={cn(
+                  'flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg transition-colors',
+                  managerView === id ? 'bg-white text-brand shadow-sm' : 'text-slate-500 hover:text-slate-700',
+                )}
+              >
+                <Icon size={14} />
+                {label}
+                {id === 'presence' && presenceExceptions.length > 0 && (
+                  <span className="ml-0.5 rounded-full bg-red-100 text-red-600 px-1.5 py-0.5 text-[10px] font-bold">
+                    {presenceExceptions.length}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+
         {isManager ? (
           <>
+          {managerView === 'attendance' && (
           <Card>
             <CardHeader>
               <CardTitle className="text-base font-bold text-slate-900 font-sans">Daily attendance — {format(parseISO(today), 'MMM d, yyyy')}</CardTitle>
@@ -117,14 +168,23 @@ export default function AttendancePage() {
                   </TableHeader>
                   <TableBody>
                     {(daily ?? []).map((rec) => (
-                      <TableRow key={rec.id}>
+                      <TableRow key={rec.id} className={STATUS_ROW_BG[rec.status]}>
                         <TableCell>
-                          <p className="text-sm font-semibold text-slate-800">
-                            {rec.employee.firstName} {rec.employee.lastName}
-                          </p>
-                          <p className="text-xs text-slate-400 sm:hidden">
-                            {rec.effectiveClockIn ? formatTime(rec.effectiveClockIn) : '—'} → {rec.effectiveClockOut ? formatTime(rec.effectiveClockOut) : '—'}
-                          </p>
+                          <div className="flex items-center gap-2.5">
+                            <Avatar
+                              initials={getInitials(`${rec.employee.firstName} ${rec.employee.lastName}`)}
+                              color={colorFor(`${rec.employee.firstName} ${rec.employee.lastName}`)}
+                              size="sm"
+                            />
+                            <div>
+                              <p className="text-sm font-semibold text-slate-800">
+                                {rec.employee.firstName} {rec.employee.lastName}
+                              </p>
+                              <p className="text-xs text-slate-400 sm:hidden">
+                                {rec.effectiveClockIn ? formatTime(rec.effectiveClockIn) : '—'} → {rec.effectiveClockOut ? formatTime(rec.effectiveClockOut) : '—'}
+                              </p>
+                            </div>
+                          </div>
                         </TableCell>
                         <TableCell>
                           <p className="text-sm text-slate-600">{rec.employee.branch?.name ?? '—'}</p>
@@ -149,7 +209,9 @@ export default function AttendancePage() {
               )}
             </CardContent>
           </Card>
+          )}
 
+          {managerView === 'presence' && (
           <Card>
             <CardHeader>
               <CardTitle className="text-base font-bold text-slate-900 font-sans">
@@ -180,10 +242,29 @@ export default function AttendancePage() {
                   </TableHeader>
                   <TableBody>
                     {presPresence.map((pv) => (
-                      <TableRow key={pv.id}>
+                      <TableRow key={pv.id} className={pv.status === 'MISSED' || pv.status === 'OUTSIDE_GEOFENCE' ? STATUS_ROW_BG.late : undefined}>
                         <TableCell>
-                          <p className="text-sm font-semibold text-slate-800">{pv.employeeName}</p>
-                          <p className="text-xs text-slate-400">{pv.employeeNumber}</p>
+                          <div className="flex items-center gap-2.5">
+                            <Avatar
+                              initials={getInitials(pv.employeeName)}
+                              color={colorFor(pv.employeeName)}
+                              size="sm"
+                            />
+                            <div>
+                              <p className="text-sm font-semibold text-slate-800">{pv.employeeName}</p>
+                              <p className="text-xs text-slate-400">{pv.employeeNumber}</p>
+                            </div>
+                          </div>
+                          {pv.status === 'OUTSIDE_GEOFENCE' && (
+                            <p className="mt-0.5 flex items-center gap-1 text-[11px] text-red-600 font-medium">
+                              <AlertTriangle size={11} /> Outside geofence
+                            </p>
+                          )}
+                          {pv.status === 'MISSED' && (
+                            <p className="mt-0.5 flex items-center gap-1 text-[11px] text-red-600 font-medium">
+                              <AlertTriangle size={11} /> Missed the check-in window
+                            </p>
+                          )}
                         </TableCell>
                         <TableCell className="text-sm text-slate-600">{pv.branchName ?? '—'}</TableCell>
                         <TableCell className="hidden sm:table-cell text-sm text-slate-600 font-mono">
@@ -200,6 +281,7 @@ export default function AttendancePage() {
               )}
             </CardContent>
           </Card>
+          )}
           </>
         ) : (
           <Card>

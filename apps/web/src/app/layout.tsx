@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google';
+import { Plus_Jakarta_Sans, JetBrains_Mono, Inter } from 'next/font/google';
 
 import { Providers } from '@/components/providers';
 import '@/styles/globals.css';
@@ -13,6 +13,12 @@ const plusJakartaSans = Plus_Jakarta_Sans({
 const jetBrainsMono = JetBrains_Mono({
   subsets: ['latin'],
   variable: '--font-mono',
+  display: 'swap',
+});
+
+const inter = Inter({
+  subsets: ['latin'],
+  variable: '--font-body',
   display: 'swap',
 });
 
@@ -44,7 +50,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${plusJakartaSans.variable} ${jetBrainsMono.variable} font-sans antialiased`}>
+      <body className={`${plusJakartaSans.variable} ${jetBrainsMono.variable} ${inter.variable} font-body antialiased`}>
         <Providers>{children}</Providers>
       </body>
     </html>

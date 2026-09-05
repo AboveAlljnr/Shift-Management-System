@@ -2,8 +2,8 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import axios, { AxiosError } from 'axios';
-import { MapPin, Clock, AlertTriangle, CheckCircle2, Wifi, WifiOff, RefreshCw, CalendarClock } from 'lucide-react';
-import { useState } from 'react';
+import { MapPin, Clock, AlertTriangle, CheckCircle2, Pause, Play, Wifi, WifiOff, RefreshCw, CalendarClock } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -94,10 +94,16 @@ type GeoStatus = 'checking' | 'valid' | 'invalid' | 'permission-denied' | 'unsup
 export default function MobilePage() {
   const queryClient = useQueryClient();
   const todayISO = new Date().toISOString().slice(0, 10);
+  const [now, setNow] = useState(() => new Date());
   const [locating, setLocating] = useState(false);
   const [clockNotice, setClockNotice] = useState<string | null>(null);
   const [geoStatus, setGeoStatus] = useState<GeoStatus>('checking');
   const [position, setPosition] = useState<{ lat: number; lng: number } | null>(null);
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const { data: me } = useQuery({ queryKey: ['myEmployee'], queryFn: fetchMyEmployee });
   const myEmployeeId = me?.id;
@@ -157,6 +163,7 @@ export default function MobilePage() {
   const todaysShift = myShifts?.find((s) => s.startAt.slice(0, 10) === todayISO);
   const todaysAttendance = attendance?.find((a) => a.workDate.slice(0, 10) === todayISO);
   const isClockedIn = !!todaysAttendance?.effectiveClockIn && !todaysAttendance?.effectiveClockOut;
+  const isOnBreak = isClockedIn && (todaysAttendance?.breaks ?? []).some((b) => !b.endAt);
 
   const presenceVerification = presence?.verification ?? null;
   const presenceDue =
@@ -210,6 +217,20 @@ export default function MobilePage() {
     },
     onError: (e) => setClockNotice(extractClockError(e)),
     onSettled: () => setLocating(false),
+  });
+
+  const breakMutation = useMutation({
+    mutationFn: (eventType: 'break_start' | 'break_end') =>
+      recordClockEvent({
+        eventType,
+        clientOccurredAt: new Date().toISOString(),
+        idempotencyKey: crypto.randomUUID(),
+      }),
+    onSuccess: (_, eventType) => {
+      queryClient.invalidateQueries({ queryKey: ['attendance', 'me'] });
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    },
+    onError: (e) => setClockNotice(extractClockError(e)),
   });
 
   const requestOpenShiftMutation = useMutation({
@@ -292,11 +313,15 @@ export default function MobilePage() {
         {/* Header */}
         <div className="text-center">
           <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider">
-            {format(new Date(), 'EEEE, MMMM d')}
+            {format(now, 'EEEE, MMMM d')}
           </p>
           <h1 className="text-xl font-bold text-slate-900 mt-1 font-sans">
-            {me ? `${me.firstName} ${me.lastName}` : 'Employee'}
+            {me ? `Good ${now.getHours() < 12 ? 'morning' : now.getHours() < 17 ? 'afternoon' : 'evening'}, ${me.firstName}` : 'Employee'}
           </h1>
+          <p className="text-3xl font-bold text-slate-900 font-mono mt-2 tabular-nums tracking-tight">
+            {format(now, 'h:mm:ss')}
+            <span className="text-base text-slate-400 ml-1">{format(now, 'a')}</span>
+          </p>
         </div>
 
         {/* Geofence status */}
@@ -485,48 +510,85 @@ export default function MobilePage() {
           </Card>
         )}
 
-        {/* Clock button */}
-        <div className="space-y-3">
-          <Button
-            onClick={handleClock}
-            disabled={clockMutation.isPending || locating}
-            className={cn(
-              'w-full py-6 text-base font-bold rounded-xl shadow-lg active:scale-[0.98] transition-all',
-              isClockedIn
-                ? 'bg-red-600 hover:bg-red-700 text-white shadow-red-200'
-                : 'bg-brand hover:bg-brand-dark text-white shadow-brand/30'
-            )}
-          >
-            {locating ? (
-              <span className="flex items-center gap-2">
-                <MapPin size={18} className="animate-pulse" />
-                Checking location…
-              </span>
-            ) : clockMutation.isPending ? (
-              'Recording…'
-            ) : isClockedIn ? (
-              'CLOCK OUT'
-            ) : (
-              'CLOCK IN'
-            )}
-          </Button>
-
-          {clockNotice && (
-            <div className={cn(
-              'flex items-center gap-2 rounded-lg px-3 py-2 text-sm',
-              clockNotice.includes('recorded')
-                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                : 'bg-red-50 text-red-600 border border-red-200'
-            )}>
-              {clockNotice.includes('recorded') ? (
-                <CheckCircle2 size={16} className="shrink-0" />
-              ) : (
-                <AlertTriangle size={16} className="shrink-0" />
+        {/* Clock control */}
+        <Card className="border border-slate-200/80">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                {isClockedIn ? (isOnBreak ? 'On Break' : 'On Shift') : 'Off Shift'}
+              </p>
+              {todaysShift && (
+                <p className="text-xs text-slate-500">
+                  {formatTime(todaysShift.startAt)} – {formatTime(todaysShift.endAt)}
+                </p>
               )}
-              {clockNotice}
             </div>
-          )}
-        </div>
+
+            <div className="text-center mb-4">
+              <p className="text-2xl font-bold text-slate-900 font-mono tabular-nums tracking-tight">
+                {format(now, 'h:mm')}
+                <span className="text-sm text-slate-400 ml-1">{format(now, 'a')}</span>
+              </p>
+              <p className="text-[10px] text-slate-400 mt-1">
+                {todaysShift ? `Shift starts at ${formatTime(todaysShift.startAt)}` : 'No shift assigned'}
+              </p>
+            </div>
+
+            <Button
+              onClick={handleClock}
+              disabled={clockMutation.isPending || locating}
+              className={cn(
+                'w-full py-6 text-base font-bold rounded-xl shadow-lg active:scale-[0.98] transition-all',
+                isClockedIn
+                  ? 'bg-red-600 hover:bg-red-700 text-white shadow-red-200'
+                  : 'bg-brand hover:bg-brand-dark text-white shadow-brand/30'
+              )}
+            >
+              {locating ? (
+                <span className="flex items-center gap-2">
+                  <MapPin size={18} className="animate-pulse" />
+                  Checking location…
+                </span>
+              ) : clockMutation.isPending ? (
+                'Recording…'
+              ) : isClockedIn ? (
+                'CLOCK OUT'
+              ) : (
+                'CLOCK IN'
+              )}
+            </Button>
+
+            {isClockedIn && (
+              <Button
+                onClick={() => breakMutation.mutate(isOnBreak ? 'break_end' : 'break_start')}
+                disabled={breakMutation.isPending}
+                variant={isOnBreak ? 'primary' : 'secondary'}
+                className="w-full py-5 mt-2 text-sm font-bold rounded-xl"
+              >
+                <span className="flex items-center gap-2">
+                  {isOnBreak ? <Play size={16} /> : <Pause size={16} />}
+                  {isOnBreak ? 'END BREAK' : 'START BREAK'}
+                </span>
+              </Button>
+            )}
+
+            {clockNotice && (
+              <div className={cn(
+                'mt-3 flex items-center gap-2 rounded-lg px-3 py-2 text-sm',
+                clockNotice.includes('recorded')
+                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                  : 'bg-red-50 text-red-600 border border-red-200'
+              )}>
+                {clockNotice.includes('recorded') ? (
+                  <CheckCircle2 size={16} className="shrink-0" />
+                ) : (
+                  <AlertTriangle size={16} className="shrink-0" />
+                )}
+                {clockNotice}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Open shifts */}
         <Card className="border border-slate-200/80">

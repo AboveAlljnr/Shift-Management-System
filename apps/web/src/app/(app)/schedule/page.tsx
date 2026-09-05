@@ -1,7 +1,17 @@
 ﻿'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Calendar, Inbox, Plus, RefreshCw, Sparkles } from 'lucide-react';
+import {
+  Calendar,
+  AlignJustify,
+  ChevronLeft,
+  ChevronRight,
+  Inbox,
+  LayoutGrid,
+  Plus,
+  RefreshCw,
+  Sparkles,
+} from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
 import { Card, CardContent } from '@/components/ui/card';
@@ -9,6 +19,7 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Avatar } from '@/components/ui/avatar';
 import {
   Modal,
   ModalContent,
@@ -25,6 +36,7 @@ import {
   createShift,
   fetchBranches,
   fetchCertifications,
+  fetchCoverage,
   fetchDepartments,
   fetchEmployees,
   fetchScheduleVersions,
@@ -52,7 +64,7 @@ import {
   type SwapRequestRow,
 } from '@/lib/api/queries';
 import { getAuthUser, hasRole } from '@/lib/auth';
-import { formatTime } from '@/lib/utils';
+import { formatTime, getInitials } from '@/lib/utils';
 import { format, parseISO } from 'date-fns';
 
 interface ConflictItem {
@@ -107,6 +119,9 @@ export default function SchedulePage() {
   const [showSchedules, setShowSchedules] = useState(false);
   const [showOpenRequests, setShowOpenRequests] = useState(false);
   const [showSwapRequests, setShowSwapRequests] = useState(false);
+  const [view, setView] = useState<'week' | 'day'>('week');
+  const [weekStart, setWeekStart] = useState(() => toISODate(startOfWeek(new Date())));
+  const [deptFilter, setDeptFilter] = useState('all');
   const [form, setForm] = useState({
     name: '',
     branchId: '',
@@ -157,19 +172,83 @@ export default function SchedulePage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900 font-sans">Schedule</h1>
-          <p className="text-sm text-slate-500 mt-0.5">{(shifts ?? []).length} shifts · create, assign, and track</p>
+        <div className="flex items-center gap-4">
+          <div>
+            <h1 className="text-xl font-bold text-slate-900 font-sans">Schedule</h1>
+            <p className="text-sm text-slate-500 mt-0.5">{(shifts ?? []).length} shifts · create, assign, and track</p>
+          </div>
+          <div className="hidden md:flex items-center gap-1 bg-slate-100 rounded-lg p-1">
+            <button
+              onClick={() => setView('week')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+                view === 'week' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Week
+            </button>
+            <button
+              onClick={() => setView('day')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+                view === 'day' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Day
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {view === 'week' && (
+            <div className="flex items-center gap-1 border border-slate-200 rounded-lg overflow-hidden">
+              <button
+                onClick={() => setWeekStart((w) => toISODate(addDays(parseLocalDate(w), -7)))}
+                aria-label="Previous week"
+                className="p-2 hover:bg-slate-50 cursor-pointer"
+              >
+                <ChevronLeft size={16} className="text-slate-500" />
+              </button>
+              <span className="px-4 text-sm font-semibold text-slate-700 border-x border-slate-200 whitespace-nowrap">
+                {format(parseLocalDate(weekStart), 'MMM d')} –{' '}
+                {format(addDays(parseLocalDate(weekStart), 6), 'MMM d, yyyy')}
+              </span>
+              <button
+                onClick={() => setWeekStart(toISODate(startOfWeek(new Date())))}
+                className="px-3 py-2 text-xs font-semibold text-brand hover:bg-brand-light cursor-pointer"
+              >
+                Today
+              </button>
+              <button
+                onClick={() => setWeekStart((w) => toISODate(addDays(parseLocalDate(w), 7)))}
+                aria-label="Next week"
+                className="p-2 hover:bg-slate-50 cursor-pointer"
+              >
+                <ChevronRight size={16} className="text-slate-500" />
+              </button>
+            </div>
+          )}
+          {view === 'week' && departments?.length ? (
+            <select
+              value={deptFilter}
+              onChange={(e) => setDeptFilter(e.target.value)}
+              className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-700 cursor-pointer focus:outline-none"
+            >
+              <option value="all">All Departments</option>
+              {departments.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
           <Button variant="secondary" size="sm" onClick={() => setShowSchedules(true)} className="gap-2">
             <Calendar size={14} className="text-brand" />
             Schedules
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => setShowGenerate(true)} className="gap-2">
-            <Sparkles size={14} className="text-brand" />
-            Smart Schedule Optimizer
-          </Button>
+          <button
+            onClick={() => setShowGenerate(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-brand/90 text-white text-sm font-semibold rounded-lg hover:from-violet-700 hover:to-brand transition cursor-pointer"
+          >
+            <Sparkles size={14} /> AI Generate
+          </button>
           {canReview && (
             <>
               <Button variant="secondary" size="sm" onClick={() => setShowOpenRequests(true)} className="gap-2">
@@ -184,12 +263,19 @@ export default function SchedulePage() {
           )}
           <Button variant="primary" size="sm" onClick={() => setShowCreate(true)} className="gap-2">
             <Plus size={14} />
-            New shift
+            Add Shift
           </Button>
         </div>
       </div>
 
-      {isLoading ? (
+      {view === 'week' ? (
+        <WeekGrid
+          weekStart={weekStart}
+          employees={employees?.data ?? []}
+          shifts={shifts ?? []}
+          departmentFilter={deptFilter}
+        />
+      ) : isLoading ? (
         <div className="space-y-3">
           {Array.from({ length: 5 }).map((_, i) => (
             <div key={i} className="h-16 animate-pulse rounded-xl bg-slate-200/60" />
@@ -1251,6 +1337,256 @@ function groupByDay(shifts: ShiftDetail[]): [string, ShiftDetail[]][] {
     map.set(day, list);
   }
   return Array.from(map.entries());
+}
+
+// ── Week grid helpers ─────────────────────────────────────────────────────────
+
+function parseLocalDate(iso: string): Date {
+  return new Date(`${iso}T00:00:00`);
+}
+
+function toISODate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+function startOfWeek(d: Date): Date {
+  const x = new Date(d);
+  const day = (x.getDay() + 6) % 7;
+  x.setDate(x.getDate() - day);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function addDays(d: Date, n: number): Date {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
+}
+
+const WEEK_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const AVATAR_COLORS = [
+  '#7C3AED',
+  '#2563EB',
+  '#DC2626',
+  '#0891B2',
+  '#059669',
+  '#D97706',
+  '#64748B',
+  '#16A34A',
+];
+
+function colorFor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) % 997;
+  return AVATAR_COLORS[hash % AVATAR_COLORS.length] as string;
+}
+
+interface WeekGridRowEmployee {
+  id: string;
+  firstName: string;
+  lastName: string;
+  status?: string;
+  team?: { id: string; name: string } | null;
+  department?: { id: string; name: string } | null;
+}
+
+function WeekGrid({
+  weekStart,
+  employees,
+  shifts,
+  departmentFilter,
+}: {
+  weekStart: string;
+  employees: WeekGridRowEmployee[];
+  shifts: ShiftDetail[];
+  departmentFilter: string;
+}) {
+  const weekEnd = toISODate(addDays(parseLocalDate(weekStart), 7));
+  const weekShifts = shifts.filter(
+    (s) =>
+      s.startAt.slice(0, 10) >= weekStart &&
+      s.startAt.slice(0, 10) < weekEnd &&
+      (departmentFilter === 'all' || s.departmentId === departmentFilter),
+  );
+
+  const { data: coverage = [] } = useQuery({
+    queryKey: ['coverage', 'schedule-week', weekStart, weekEnd, departmentFilter],
+    queryFn: () => fetchCoverage(weekShifts.map((s) => s.id)),
+    enabled: weekShifts.length > 0,
+    staleTime: 30 * 1000,
+  });
+
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = addDays(parseLocalDate(weekStart), i);
+    return { label: WEEK_LABELS[i], date: d.getDate(), iso: toISODate(d) };
+  });
+  const todayISO = new Date().toISOString().slice(0, 10);
+
+  const rows = (employees ?? []).filter((e) => !e.status || e.status === 'active');
+  const shiftStatusClass = (status: string) => {
+    if (status === 'published') return 'bg-green-50 border-green-200 text-green-800';
+    if (status === 'cancelled') return 'bg-slate-100 border-slate-200 text-slate-500';
+    return 'bg-slate-100 border-slate-200 text-slate-700';
+  };
+  const coverageByDay = days.map((day) => {
+    const dayShifts = weekShifts.filter((s) => s.startAt.slice(0, 10) === day.iso);
+    let required = 0;
+    let filled = 0;
+    for (const s of dayShifts) {
+      const c = coverage.find((x) => x.shiftId === s.id);
+      if (c && c.headcountRequired > 0) {
+        required += c.headcountRequired;
+        filled += c.headcountFilled;
+      } else {
+        required += s.requirements.reduce((sum, r) => sum + r.headcount, 0);
+        filled += s.assignments.length;
+      }
+    }
+    return { ...day, required, filled, dayShifts };
+  });
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border flex flex-wrap items-center gap-4">
+        <div className="flex items-center gap-4">
+          {[
+            ['Published', 'bg-green-50 border-green-200 text-green-700'],
+            ['Draft', 'bg-slate-100 border-slate-200 text-slate-600'],
+            ['Cancelled', 'bg-slate-100 border-slate-200 text-slate-500'],
+          ].map(([label, cls]) => (
+            <span key={label} className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold border ${cls}`}>
+              {label}
+            </span>
+          ))}
+          <span className="text-xs text-slate-400 flex items-center gap-1.5 border-l border-slate-200 pl-4">
+            <span className="w-2 h-2 rounded-sm bg-green-400 inline-block" />Full
+            <span className="w-2 h-2 rounded-sm bg-amber-400 inline-block ml-2" />Partial
+            <span className="w-2 h-2 rounded-sm bg-red-400 inline-block ml-2" />Under
+            <span className="font-medium text-slate-500 ml-1">= coverage</span>
+          </span>
+        </div>
+        {weekShifts.length === 0 && (
+          <span className="ml-auto text-xs text-slate-400">No shifts in the selected week.</span>
+        )}
+      </div>
+
+      <div className="overflow-auto max-h-[70vh]">
+        <table className="w-full border-collapse" style={{ minWidth: 880 }}>
+          <thead className="sticky top-0 z-10 bg-white shadow-sm">
+            <tr>
+              <th className="w-44 px-4 py-3 text-left border-r border-b border-border bg-slate-50">
+                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Employee</span>
+              </th>
+              {days.map((d, i) => (
+                <th
+                  key={d.iso}
+                  className={`px-3 py-3 border-b border-border text-center ${
+                    d.iso === todayISO ? 'bg-brand-light border-x border-brand/20' : 'bg-slate-50'
+                  }`}
+                >
+                  <p className="text-xs font-bold text-slate-700">{d.label}</p>
+                  <p className={`text-xs font-semibold mt-0.5 ${d.iso === todayISO ? 'text-brand' : 'text-slate-400'}`}>
+                    {d.date}
+                  </p>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((emp, ri) => (
+              <tr key={emp.id} className={ri % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}>
+                <td className="px-4 py-2.5 border-r border-b border-border w-44">
+                  <div className="flex items-center gap-2.5">
+                    <Avatar
+                      initials={getInitials(`${emp.firstName} ${emp.lastName}`)}
+                      color={colorFor(`${emp.firstName} ${emp.lastName}`)}
+                      size="sm"
+                      className="w-7 h-7 text-[10px]"
+                    />
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-slate-800 truncate">
+                        {emp.firstName} {emp.lastName}
+                      </p>
+                      <p className="text-[10px] text-slate-400 truncate">
+                        {emp.team?.name ?? emp.department?.name ?? '—'}
+                      </p>
+                    </div>
+                  </div>
+                </td>
+                {days.map((d) => {
+                  const cellShifts = weekShifts
+                    .filter(
+                      (s) =>
+                        s.startAt.slice(0, 10) === d.iso &&
+                        s.assignments.some((a) => a.employeeId === emp.id),
+                    )
+                    .sort((a, b) => a.startAt.localeCompare(b.startAt));
+                  return (
+                    <td
+                      key={d.iso}
+                      className={`px-2 py-2 border-b border-border align-top transition-colors ${
+                        d.iso === todayISO ? 'bg-brand-light/60 border-x border-brand/10' : ''
+                      }`}
+                    >
+                      <div className="space-y-1 min-h-[52px]">
+                        {cellShifts.map((s) => (
+                          <div
+                            key={s.id}
+                            className={`px-2 py-1 rounded-md border text-[11px] select-none ${shiftStatusClass(s.status)}`}
+                          >
+                            <div className="font-bold">
+                              {formatTime(s.startAt)} – {formatTime(s.endAt)}
+                            </div>
+                            <div className="opacity-70 truncate mt-0.5">{s.name}</div>
+                          </div>
+                        ))}
+                        {cellShifts.length === 0 && (
+                          <div className="w-full h-10 rounded-lg border border-dashed border-slate-200 text-slate-300 flex items-center justify-center text-lg">
+                            +
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+
+            {/* Coverage heatmap row */}
+            <tr className="sticky bottom-0 bg-white border-t-2 border-border z-10">
+              <td className="px-4 py-3 border-r border-border">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Coverage</p>
+              </td>
+              {coverageByDay.map((d) => {
+                const pct = d.required > 0 ? d.filled / d.required : 1;
+                const color = pct >= 1 ? '#16A34A' : pct >= 0.6 ? '#D97706' : '#DC2626';
+                const bgLight = pct >= 1 ? 'bg-green-50' : pct >= 0.6 ? 'bg-amber-50' : 'bg-red-50';
+                const label = pct >= 1 ? 'Full' : pct >= 0.6 ? 'Partial' : 'Under';
+                return (
+                  <td key={d.iso} className={`px-2 py-3 text-center ${d.iso === todayISO ? 'border-x border-brand/10' : ''}`}>
+                    <div className={`rounded-lg px-2 py-2 ${bgLight}`}>
+                      <p className="text-sm font-bold" style={{ color }}>
+                        {d.filled}/{d.required || '—'}
+                      </p>
+                      <div className="mt-1.5 bg-slate-200 rounded-full h-1.5 overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-500"
+                          style={{ width: `${pct * 100}%`, background: color }}
+                        />
+                      </div>
+                      <p className="text-[9px] font-semibold mt-1" style={{ color }}>
+                        {d.required > 0 ? label : 'none'}
+                      </p>
+                    </div>
+                  </td>
+                );
+              })}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
 }
 
 function CoverageBadge({ coverage }: { coverage: NonNullable<ShiftDetail['coverage']> }) {
