@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import axios, { AxiosError } from 'axios';
@@ -18,6 +18,22 @@ import {
   ArrowRight,
   Send,
   TrendingUp,
+  Building2,
+  BarChart3,
+  Sparkles,
+  Radio,
+  CheckCircle2,
+  XCircle,
+  ShieldCheck,
+  ShieldAlert,
+  CalendarClock,
+  Smartphone,
+  CreditCard,
+  Settings,
+  Activity,
+  User,
+  Layers,
+  Check,
 } from 'lucide-react';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -25,22 +41,31 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { PageHeader } from '@/components/ui/page-header';
 import { Avatar } from '@/components/ui/avatar';
 import {
+  fetchAuditLogs,
+  fetchBranches,
   fetchCompany,
   fetchCoverage,
   fetchDailyAttendance,
+  fetchDepartments,
   fetchEmployeeAttendance,
   fetchEmployees,
+  fetchGeofenceConfig,
   fetchLeaveBalances,
   fetchLeaveRequests,
   fetchMyEmployee,
   fetchMyGeofenceStatus,
   fetchMyShifts,
+  fetchPresenceVerifications,
   fetchShifts,
   recordClockEvent,
   reviewLeaveRequest,
+  type AuditLogEntry,
+  type EmployeeDetail,
+  type PresenceVerificationListItem,
   type ShiftDetail,
 } from '@/lib/api/queries';
-import { getAuthUser } from '@/lib/auth';
+import type { Branch } from '@sms/shared';
+import { getAuthUser, getPersonaInfo, getPrimaryRole, type PersonaRole } from '@/lib/auth';
 import { cn, formatTime, getInitials } from '@/lib/utils';
 import { format, parseISO } from 'date-fns';
 
@@ -81,32 +106,34 @@ function StatCard({
   trend?: 'up' | 'down' | 'neutral';
 }) {
   const body = (
-    <Card className="p-5 hover:border-slate-300 transition-colors rounded-2xl">
+    <Card className="p-5 hover:border-slate-300 transition-all rounded-2xl group shadow-sm">
       {icon ? (
         <div className="flex items-start gap-4">
           <div
-            className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+            className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 transition-transform group-hover:scale-105 shadow-sm"
             style={{ background: `${color}18` }}
           >
             <span style={{ color }}>{icon}</span>
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1">
+            <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1 font-mono">
               {label}
             </p>
-            <p className="text-2xl font-bold text-slate-900 dark:text-slate-100 leading-none font-sans">{value}</p>
-            <div className="flex items-center gap-1.5 mt-1.5">
-              {trend === 'up' && <TrendingUp size={11} className="text-green-500" />}
-              {trend === 'down' && <TrendingDownIcon />}
-              <p className="text-[11px] text-slate-400 dark:text-slate-500">{sub}</p>
-            </div>
+            <p className="text-2xl font-extrabold text-slate-900 leading-tight font-sans">{value}</p>
+            {sub && (
+              <div className="flex items-center gap-1.5 mt-1.5">
+                {trend === 'up' && <TrendingUp size={12} className="text-emerald-500 flex-shrink-0" />}
+                <p className="text-[11px] text-slate-500 truncate">{sub}</p>
+              </div>
+            )}
           </div>
         </div>
       ) : (
         <div className="flex items-start justify-between">
           <div>
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">{label}</p>
-            <p className="text-3xl font-bold text-slate-900 font-sans">{value}</p>
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono">{label}</p>
+            <p className="text-3xl font-extrabold text-slate-900 font-sans">{value}</p>
+            {sub && <p className="text-xs text-slate-400 mt-1">{sub}</p>}
           </div>
           <span className={cn('inline-block h-2.5 w-2.5 rounded-full mt-1', tone ? statClass(tone) : 'bg-slate-200')} />
         </div>
@@ -118,15 +145,6 @@ function StatCard({
     return <Link href={href}>{body}</Link>;
   }
   return body;
-}
-
-function TrendingDownIcon() {
-  return (
-    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
-      <path d="m22 17-8.5-8.5-5 5L2 7" />
-      <path d="M16 17h6v-6" />
-    </svg>
-  );
 }
 
 function useLiveClock() {
@@ -171,13 +189,11 @@ function CoverageRing({ filled, required }: { filled: number; required: number }
 
 export default function DashboardPage() {
   const user = getAuthUser();
-  const isManager = useMemo(() => {
-    if (!user) return false;
-    const roles = user.roles.map((r) => r.toLowerCase());
-    return roles.some((r) =>
-      ['owner', 'admin', 'manager', 'shift_manager', 'super_admin'].includes(r),
-    );
-  }, [user]);
+  const naturalPrimary = useMemo(() => getPrimaryRole(user), [user]);
+  const [activePersona, setActivePersona] = useState<PersonaRole | null>(null);
+
+  const effectivePersona = activePersona ?? naturalPrimary;
+  const personaInfo = getPersonaInfo(user);
 
   const { data: company, isLoading: companyLoading } = useQuery({
     queryKey: ['company'],
@@ -188,10 +204,10 @@ export default function DashboardPage() {
   if (companyLoading || !company) {
     return (
       <div className="space-y-6">
-        <div className="h-28 animate-pulse rounded-xl bg-slate-200/60" />
+        <div className="h-28 animate-pulse rounded-2xl bg-slate-200/60" />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="h-24 animate-pulse rounded-xl bg-slate-200/60" />
+            <div key={i} className="h-28 animate-pulse rounded-2xl bg-slate-200/60" />
           ))}
         </div>
       </div>
@@ -200,18 +216,666 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title={company.name}
-        subtitle={`${isManager ? 'Manager workspace' : 'Team member workspace'} · ${format(today, 'EEEE, MMMM d')}`}
-      />
+      {/* Persona Context Banner & Quick Switcher */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3.5 rounded-2xl border border-slate-200 shadow-sm">
+        <div className="flex items-center gap-3">
+          <div
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-white shadow-sm flex-shrink-0"
+            style={{ backgroundColor: personaInfo.accentHex }}
+          >
+            {effectivePersona === 'OWNER' && <Building2 size={18} />}
+            {effectivePersona === 'MANAGER' && <BarChart3 size={18} />}
+            {effectivePersona === 'SUPERVISOR' && <Shield size={18} />}
+            {effectivePersona === 'EMPLOYEE' && <User size={18} />}
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-800 uppercase tracking-wider font-mono">
+                {company.name}
+              </span>
+              <span className="text-slate-300">·</span>
+              <span
+                className="text-[11px] font-extrabold px-2 py-0.5 rounded-md border uppercase"
+                style={{
+                  backgroundColor: `${personaInfo.accentHex}15`,
+                  borderColor: `${personaInfo.accentHex}30`,
+                  color: personaInfo.accentHex,
+                }}
+              >
+                {effectivePersona} WORKSPACE
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {effectivePersona === 'OWNER' && 'Executive governance, organization hierarchy, audit logs, and company metrics.'}
+              {effectivePersona === 'MANAGER' && 'AI shift generation, leave approvals, availability rules, and staff schedules.'}
+              {effectivePersona === 'SUPERVISOR' && 'Live floor radar, real-time presence verifications, and shift execution.'}
+              {effectivePersona === 'EMPLOYEE' && 'Personal geofenced punch clock, upcoming shifts, availability, and PTO requests.'}
+            </p>
+          </div>
+        </div>
 
-      {isManager ? <ManagerDashboard companyName={company.name} /> : <EmployeeDashboard />}
+        {/* Demo Persona Switcher Pill */}
+        <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200 self-start sm:self-auto flex-shrink-0">
+          <span className="text-[10px] font-bold text-slate-500 uppercase px-2">Role View:</span>
+          {(['OWNER', 'MANAGER', 'SUPERVISOR', 'EMPLOYEE'] as PersonaRole[]).map((p) => {
+            const isSelected = effectivePersona === p;
+            return (
+              <button
+                key={p}
+                onClick={() => setActivePersona(p)}
+                className={cn(
+                  'px-2.5 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer',
+                  isSelected
+                    ? 'bg-white text-slate-900 shadow-sm border border-slate-200/80'
+                    : 'text-slate-500 hover:text-slate-800',
+                )}
+              >
+                {p === 'OWNER' && 'Owner'}
+                {p === 'MANAGER' && 'Manager'}
+                {p === 'SUPERVISOR' && 'Supervisor'}
+                {p === 'EMPLOYEE' && 'Employee'}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Render the specific persona dashboard */}
+      {effectivePersona === 'OWNER' && <OwnerDashboard company={company} />}
+      {effectivePersona === 'MANAGER' && <ManagerDashboard companyName={company.name} />}
+      {effectivePersona === 'SUPERVISOR' && <SupervisorDashboard companyName={company.name} />}
+      {effectivePersona === 'EMPLOYEE' && <EmployeeDashboard />}
     </div>
   );
 }
 
 // ============================================================
-// Employee Dashboard
+// 1. OWNER / EXECUTIVE DASHBOARD
+// ============================================================
+
+function OwnerDashboard({ company }: { company: { name: string; timezone: string } }) {
+  const { data: employees } = useQuery({
+    queryKey: ['employees'],
+    queryFn: () => fetchEmployees({ limit: 100 }),
+    staleTime: 60 * 1000,
+  });
+
+  const { data: branches = [] } = useQuery({
+    queryKey: ['branches'],
+    queryFn: fetchBranches,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: departments = [] } = useQuery({
+    queryKey: ['departments'],
+    queryFn: fetchDepartments,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: geofenceConfig } = useQuery({
+    queryKey: ['geofenceConfig'],
+    queryFn: fetchGeofenceConfig,
+  });
+
+  const { data: auditLogPage } = useQuery({
+    queryKey: ['auditLogs'],
+    queryFn: () => fetchAuditLogs({ limit: 8 }),
+    staleTime: 30 * 1000,
+  });
+  const auditLogs = auditLogPage?.items ?? [];
+
+  const totalStaff = employees?.pagination?.total ?? (employees?.data ?? []).length;
+  const activeStaff = (employees?.data ?? []).filter((e) => e.status === 'active').length;
+  const activeBranches = branches.filter((b) => b.isActive).length;
+  const activeDepts = departments.filter((d) => d.isActive).length;
+
+  return (
+    <div className="space-y-6">
+      {/* Executive Hero Banner */}
+      <div className="bg-gradient-to-r from-slate-900 via-purple-950 to-slate-900 text-white rounded-3xl p-6 sm:p-8 shadow-xl border border-purple-900/40 relative overflow-hidden">
+        <div className="absolute top-0 right-0 -mt-10 -mr-10 w-64 h-64 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="px-2.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 text-[10px] font-extrabold uppercase tracking-widest border border-purple-500/30">
+                EXECUTIVE CONTROL CENTER
+              </span>
+              <span className="text-slate-400 text-xs font-mono">{format(today, 'MMMM d, yyyy')}</span>
+            </div>
+            <h1 className="text-3xl font-extrabold text-white font-sans tracking-tight">
+              {company.name} Overview
+            </h1>
+            <p className="text-slate-300 text-sm mt-1 max-w-xl">
+              System governance, multi-location workforce metrics, and organizational compliance.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <Link
+              href="/organization"
+              className="px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl transition-all shadow-md flex items-center gap-2"
+            >
+              <Building2 size={14} />
+              Manage Branches
+            </Link>
+            <Link
+              href="/workforce"
+              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition-all border border-slate-700 flex items-center gap-2"
+            >
+              <Users size={14} />
+              Staff Directory
+            </Link>
+            <Link
+              href="/settings"
+              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition-all border border-slate-700 flex items-center gap-2"
+            >
+              <Settings size={14} />
+              System Settings
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* 4 Executive KPI Cards */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="Total Workforce"
+          value={totalStaff}
+          sub={`${activeStaff} active employees`}
+          icon={<Users size={20} />}
+          color="#7C3AED"
+          href="/workforce"
+        />
+        <StatCard
+          label="Operating Locations"
+          value={activeBranches}
+          sub={`${activeDepts} departments assigned`}
+          icon={<Building2 size={20} />}
+          color="#2563EB"
+          href="/organization"
+        />
+        <StatCard
+          label="Geofence Policy"
+          value={geofenceConfig?.mode?.toUpperCase() ?? 'STRICT'}
+          sub={geofenceConfig?.mode === 'strict' ? 'Strict boundary enforcement' : 'Standard compliance'}
+          icon={<ShieldCheck size={20} />}
+          color="#059669"
+          href="/settings"
+        />
+        <StatCard
+          label="Platform Plan"
+          value="PRO TIER"
+          sub="All features enabled ($0 Free tier)"
+          icon={<CreditCard size={20} />}
+          color="#D97706"
+          href="/billing"
+        />
+      </div>
+
+      {/* Organization Operating Branches Grid */}
+      <Card className="rounded-2xl shadow-sm border-slate-200">
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <div>
+            <CardTitle className="text-base font-bold text-slate-900 font-sans">Active Operating Branches</CardTitle>
+            <CardDescription>Multi-location operational status</CardDescription>
+          </div>
+          <Link href="/organization" className="text-xs font-bold text-brand hover:underline flex items-center gap-1">
+            Configure Locations <ChevronRight size={14} />
+          </Link>
+        </CardHeader>
+        <CardContent>
+          {branches.length === 0 ? (
+            <p className="text-sm text-slate-500 py-4 text-center">No branch locations configured.</p>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {branches.map((b) => (
+                <div key={b.id} className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-slate-50 transition-colors">
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <Building2 size={16} className="text-purple-600" />
+                      <p className="text-sm font-bold text-slate-900">{b.name}</p>
+                    </div>
+                    <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full uppercase', b.isActive ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600')}>
+                      {b.isActive ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 font-mono">Code: {b.code} · {b.timezone}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Security & Operational Audit Log */}
+      <Card className="rounded-2xl shadow-sm border-slate-200">
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <div>
+            <CardTitle className="text-base font-bold text-slate-900 font-sans">Recent System & Audit Activity</CardTitle>
+            <CardDescription>Real-time security and operational events</CardDescription>
+          </div>
+          <Link href="/activities" className="text-xs font-bold text-brand hover:underline flex items-center gap-1">
+            Full Audit Trail <ChevronRight size={14} />
+          </Link>
+        </CardHeader>
+        <CardContent>
+          {auditLogs.length === 0 ? (
+            <p className="text-sm text-slate-500 py-4 text-center">No audit activity recorded yet.</p>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {auditLogs.slice(0, 5).map((log: AuditLogEntry) => (
+                <div key={log.id} className="py-2.5 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center text-xs font-bold flex-shrink-0">
+                      <Activity size={14} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-slate-800 truncate">
+                        {log.action.replace(/\./g, ' ').replace(/_/g, ' ').toUpperCase()}
+                      </p>
+                      <p className="text-[11px] text-slate-500 truncate">
+                        {log.actorEmail ? log.actorEmail : 'System'} · Resource: {log.resource}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-[10px] text-slate-400 font-mono whitespace-nowrap">
+                    {format(parseISO(log.occurredAt), 'MMM d, HH:mm')}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// 2. OPERATIONS MANAGER DASHBOARD
+// ============================================================
+
+function ManagerDashboard({ companyName }: { companyName: string }) {
+  const queryClient = useQueryClient();
+  const [reviewError, setReviewError] = useState<string | null>(null);
+
+  const { data: employees } = useQuery({
+    queryKey: ['employees'],
+    queryFn: () => fetchEmployees({ limit: 100 }),
+    staleTime: 60 * 1000,
+  });
+
+  const { data: weekShifts } = useQuery({
+    queryKey: ['shifts', todayISO, weekEndISO],
+    queryFn: () => fetchShifts({ startDate: todayISO, endDate: weekEndISO }),
+    staleTime: 60 * 1000,
+  });
+
+  const { data: dailyAttendance } = useQuery({
+    queryKey: ['attendance', 'daily', todayISO],
+    queryFn: () => fetchDailyAttendance(todayISO),
+    staleTime: 60 * 1000,
+  });
+
+  const { data: pendingLeave } = useQuery({
+    queryKey: ['leave', 'pending'],
+    queryFn: () => fetchLeaveRequests({ status: 'pending' }),
+    staleTime: 30 * 1000,
+  });
+
+  const { data: coverage = [] } = useQuery({
+    queryKey: ['coverage', 'week', todayISO, weekEndISO],
+    queryFn: () => fetchCoverage((weekShifts ?? []).map((s) => s.id)),
+    enabled: !!weekShifts && weekShifts.length > 0,
+    staleTime: 60 * 1000,
+  });
+
+  const review = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: 'approve' | 'reject' }) =>
+      reviewLeaveRequest(id, { action }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['leave'] }),
+    onError: (e) => setReviewError(e instanceof Error ? e.message : 'Review failed'),
+  });
+
+  const present = (dailyAttendance ?? []).filter((a) => ['present', 'late'].includes(a.status)).length;
+  const late = (dailyAttendance ?? []).filter((a) => a.status === 'late').length;
+
+  const todayShifts = (weekShifts ?? []).filter((s) => s.startAt.slice(0, 10) === todayISO);
+  const todayCoverage = coverage.filter((c) => todayShifts.some((s) => s.id === c.shiftId));
+  const filledToday = todayCoverage.reduce((sum, c) => sum + c.headcountFilled, 0);
+  const requiredToday = todayCoverage.reduce((sum, c) => sum + c.headcountRequired, 0);
+
+  const uncovered = coverage.filter((c) => c.shortfall > 0);
+  const unfilledCount = uncovered.length;
+
+  return (
+    <div className="space-y-6">
+      {/* Manager Operations Hero Card */}
+      <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 text-white rounded-3xl p-6 sm:p-8 shadow-xl border border-blue-900/40 relative overflow-hidden">
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div className="flex items-center gap-5">
+            <CoverageRing filled={filledToday} required={requiredToday} />
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300 text-[10px] font-extrabold uppercase tracking-widest border border-blue-500/30">
+                  OPERATIONS HUB
+                </span>
+                <span className="text-slate-400 text-xs font-mono">{format(today, 'EEEE, MMM d')}</span>
+              </div>
+              <h2 className="text-2xl font-extrabold text-white font-sans">
+                Shift Scheduling & Roster Command
+              </h2>
+              <p className="text-slate-300 text-sm mt-0.5">
+                {filledToday} of {requiredToday} required shifts filled for today ({unfilledCount} shortfalls across the week).
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <Link
+              href="/schedule"
+              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-all shadow-md flex items-center gap-2"
+            >
+              <Sparkles size={14} className="text-amber-300" />
+              Run AI Auto-Scheduler
+            </Link>
+            <Link
+              href="/leave"
+              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition-all border border-slate-700 flex items-center gap-2"
+            >
+              <Plane size={14} />
+              Review Leave ({pendingLeave?.length ?? 0})
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* 4 Operations KPI Cards */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="Today's Shift Coverage"
+          value={requiredToday > 0 ? `${Math.round((filledToday / requiredToday) * 100)}%` : '100%'}
+          sub={`${filledToday}/${requiredToday} slots filled today`}
+          icon={<Calendar size={20} />}
+          color="#2563EB"
+          href="/schedule"
+        />
+        <StatCard
+          label="Understaffed Shifts"
+          value={unfilledCount}
+          sub={unfilledCount > 0 ? 'Requires attention in matrix' : 'All shifts covered'}
+          icon={<AlertTriangle size={20} />}
+          color={unfilledCount > 0 ? '#DC2626' : '#16A34A'}
+          href="/schedule"
+        />
+        <StatCard
+          label="Pending Leave Requests"
+          value={pendingLeave?.length ?? 0}
+          sub="Awaiting manager sign-off"
+          icon={<Plane size={20} />}
+          color="#D97706"
+          href="/leave"
+        />
+        <StatCard
+          label="Late / Absent Today"
+          value={late}
+          sub={`${present} workers clocked in`}
+          icon={<Clock size={20} />}
+          color="#7C3AED"
+          href="/attendance"
+        />
+      </div>
+
+      {/* Pending Leave Approvals Queue */}
+      {pendingLeave && pendingLeave.length > 0 && (
+        <Card className="rounded-2xl shadow-sm border-amber-200 bg-amber-50/20">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base font-bold text-slate-900 font-sans flex items-center gap-2">
+              <Plane size={16} className="text-amber-600" />
+              Pending Leave Approval Queue ({pendingLeave.length})
+            </CardTitle>
+            <CardDescription>Review and action staff time-off requests</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {pendingLeave.slice(0, 3).map((lr) => (
+              <div key={lr.id} className="p-3.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-xs font-bold text-slate-800">
+                    {lr.employee?.firstName} {lr.employee?.lastName} · <span className="text-amber-700">{lr.leaveType?.name ?? 'Leave'}</span>
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    {format(parseISO(lr.startDate), 'MMM d')} – {format(parseISO(lr.endDate), 'MMM d, yyyy')} ({lr.requestedDays} days)
+                    {lr.reason && ` · Reason: ${lr.reason}`}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => review.mutate({ id: lr.id, action: 'approve' })}
+                    disabled={review.isPending}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
+                  >
+                    Approve
+                  </button>
+                  <button
+                    onClick={() => review.mutate({ id: lr.id, action: 'reject' })}
+                    disabled={review.isPending}
+                    className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold rounded-lg transition-colors cursor-pointer"
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Today's Active Shifts Table */}
+      <Card className="rounded-2xl shadow-sm border-slate-200">
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <div>
+            <CardTitle className="text-base font-bold text-slate-900 font-sans">Today&apos;s Scheduled Shifts</CardTitle>
+            <CardDescription>Active roster for {format(today, 'MMMM d')}</CardDescription>
+          </div>
+          <Link href="/schedule" className="text-xs font-bold text-brand hover:underline flex items-center gap-1">
+            Open Schedule Matrix <ChevronRight size={14} />
+          </Link>
+        </CardHeader>
+        <CardContent>
+          {todayShifts.length === 0 ? (
+            <p className="text-sm text-slate-500 py-4 text-center">No shifts scheduled for today.</p>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {todayShifts.map((s) => (
+                <div key={s.id} className="py-3 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold text-slate-800">{s.name}</p>
+                    <p className="text-xs text-slate-400">
+                      {formatTime(s.startAt)} – {formatTime(s.endAt)} · Branch: {s.branch?.name ?? 'Assigned'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-mono text-slate-500">
+                      {s.assignments?.length ?? 0} assigned
+                    </span>
+                    <StatusBadge status={s.status} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// 3. SHIFT SUPERVISOR DASHBOARD
+// ============================================================
+
+function SupervisorDashboard({ companyName }: { companyName: string }) {
+  const { data: dailyAttendance } = useQuery({
+    queryKey: ['attendance', 'daily', todayISO],
+    queryFn: () => fetchDailyAttendance(todayISO),
+    staleTime: 30 * 1000,
+  });
+
+  const { data: presenceVerifications = [] } = useQuery({
+    queryKey: ['presenceVerifications'],
+    queryFn: () => fetchPresenceVerifications(),
+    staleTime: 30 * 1000,
+  });
+
+  const { data: todayShifts = [] } = useQuery({
+    queryKey: ['shifts', todayISO, todayISO],
+    queryFn: () => fetchShifts({ startDate: todayISO, endDate: todayISO }),
+    staleTime: 30 * 1000,
+  });
+
+  const present = (dailyAttendance ?? []).filter((a) => ['present', 'late'].includes(a.status)).length;
+  const late = (dailyAttendance ?? []).filter((a) => a.status === 'late').length;
+  const exceptions = presenceVerifications.filter((p) => p.status === 'MISSED' || p.status === 'OUTSIDE_GEOFENCE').length;
+
+  return (
+    <div className="space-y-6">
+      {/* Supervisor Command Hero Banner */}
+      <div className="bg-gradient-to-r from-slate-900 via-emerald-950 to-slate-900 text-white rounded-3xl p-6 sm:p-8 shadow-xl border border-emerald-900/40 relative overflow-hidden">
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-extrabold uppercase tracking-widest border border-emerald-500/30 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                LIVE FLOOR RADAR
+              </span>
+              <span className="text-slate-400 text-xs font-mono">{format(today, 'HH:mm · EEEE, MMM d')}</span>
+            </div>
+            <h1 className="text-3xl font-extrabold text-white font-sans tracking-tight">
+              Shift Operations & Floor Verification
+            </h1>
+            <p className="text-slate-300 text-sm mt-1">
+              Real-time worker check-in tracking, geofence radius verification, and active shift headcount.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <Link
+              href="/attendance"
+              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition-all shadow-md flex items-center gap-2"
+            >
+              <ShieldCheck size={14} />
+              Presence Radar
+            </Link>
+            <Link
+              href="/schedule"
+              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition-all border border-slate-700 flex items-center gap-2"
+            >
+              <Calendar size={14} />
+              Shift Roster
+            </Link>
+            <Link
+              href="/mobile"
+              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition-all border border-slate-700 flex items-center gap-2"
+            >
+              <Smartphone size={14} />
+              Mobile Punch
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* 4 Supervisor Floor KPIs */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="On Duty Now"
+          value={present}
+          sub={`${late} clocked in late`}
+          icon={<Users size={20} />}
+          color="#059669"
+          href="/attendance"
+        />
+        <StatCard
+          label="Geofence Exceptions"
+          value={exceptions}
+          sub={exceptions > 0 ? 'Missed or outside fence' : 'All check-ins verified'}
+          icon={<ShieldAlert size={20} />}
+          color={exceptions > 0 ? '#DC2626' : '#16A34A'}
+          href="/attendance"
+        />
+        <StatCard
+          label="Active Shifts Today"
+          value={todayShifts.length}
+          sub="On-floor shifts scheduled"
+          icon={<Calendar size={20} />}
+          color="#2563EB"
+          href="/schedule"
+        />
+        <StatCard
+          label="Floor Status"
+          value="ACTIVE"
+          sub="Live presence verification ON"
+          icon={<Radio size={20} />}
+          color="#7C3AED"
+          href="/attendance"
+        />
+      </div>
+
+      {/* Real-time Presence Verification Radar Feed */}
+      <Card className="rounded-2xl shadow-sm border-slate-200">
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <div>
+            <CardTitle className="text-base font-bold text-slate-900 font-sans">Live Presence & Geofence Verifications</CardTitle>
+            <CardDescription>On-site worker location check-in stream</CardDescription>
+          </div>
+          <Link href="/attendance" className="text-xs font-bold text-brand hover:underline flex items-center gap-1">
+            View All Verifications <ChevronRight size={14} />
+          </Link>
+        </CardHeader>
+        <CardContent>
+          {presenceVerifications.length === 0 ? (
+            <p className="text-sm text-slate-500 py-4 text-center">No presence verification records for current shift window.</p>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {presenceVerifications.slice(0, 6).map((pv: PresenceVerificationListItem) => (
+                <div key={pv.id} className="py-2.5 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div
+                      className={cn(
+                        'w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0',
+                        pv.status === 'VERIFIED' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700',
+                      )}
+                    >
+                      {pv.status === 'VERIFIED' ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-slate-800 truncate">
+                        {pv.employeeName} <span className="text-slate-400 font-normal">({pv.employeeNumber})</span>
+                      </p>
+                      <p className="text-[11px] text-slate-500 truncate">
+                        {pv.branchName ?? 'Unknown branch'} · Distance: {pv.distanceMeters != null ? `${Math.round(pv.distanceMeters)}m` : 'N/A'}
+                      </p>
+                    </div>
+                  </div>
+                  <span
+                    className={cn(
+                      'text-[10px] font-bold px-2 py-0.5 rounded-full uppercase',
+                      pv.status === 'VERIFIED' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200',
+                    )}
+                  >
+                    {pv.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// 4. EMPLOYEE DASHBOARD
 // ============================================================
 
 function EmployeeDashboard() {
@@ -267,12 +931,15 @@ function EmployeeDashboard() {
         longitude: args.longitude,
       }),
     onSuccess: () => {
-      setClockNotice('Time recorded');
+      setClockNotice('Time recorded successfully');
       queryClient.invalidateQueries({ queryKey: ['attendance', 'me'] });
     },
     onError: (e) => setClockNotice(extractClockError(e)),
     onSettled: () => setLocating(false),
   });
+
+  const todaysAttendance = attendance?.find((a) => a.workDate.slice(0, 10) === todayISO);
+  const isClockedIn = !!todaysAttendance?.effectiveClockIn && !todaysAttendance?.effectiveClockOut;
 
   const handleClock = async () => {
     setClockNotice(null);
@@ -302,786 +969,222 @@ function EmployeeDashboard() {
 
   const todaysShift = myShifts?.find((s) => s.startAt.slice(0, 10) === todayISO);
   const upcoming = (myShifts ?? []).filter((s) => s.startAt.slice(0, 10) >= todayISO).slice(0, 3);
-  const todaysAttendance = attendance?.find((a) => a.workDate.slice(0, 10) === todayISO);
-  const isClockedIn = !!todaysAttendance?.effectiveClockIn && !todaysAttendance?.effectiveClockOut;
   const totalAllocated = (balances ?? []).reduce((sum, b) => sum + b.allocatedDays, 0);
   const totalRemaining = (balances ?? []).reduce((sum, b) => sum + b.remainingDays, 0);
 
   return (
     <div className="space-y-6">
-      {/* Greeting + clock card */}
-      <Card>
-        <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
+      {/* Employee Greeting & Punch Hero Card */}
+      <Card className="rounded-3xl border-slate-200 shadow-md overflow-hidden bg-gradient-to-br from-white via-slate-50 to-sky-50/40">
+        <CardContent className="flex flex-col gap-6 p-6 sm:p-8 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider">
-              {format(today, 'EEEE, MMMM d').toUpperCase()}
-            </p>
-            <p className="text-2xl font-bold text-slate-900 mt-0.5 font-sans">
-              Hello{me ? `, ${me.firstName}` : ''} 👋
-            </p>
-            <p className="text-sm text-slate-500 mt-1">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="px-2.5 py-0.5 rounded-full bg-sky-500/15 text-sky-700 text-[10px] font-extrabold uppercase tracking-widest border border-sky-500/25">
+                EMPLOYEE PORTAL
+              </span>
+              <span className="text-slate-400 text-xs font-mono">{format(today, 'EEEE, MMMM d')}</span>
+            </div>
+            <h1 className="text-3xl font-extrabold text-slate-900 font-sans tracking-tight">
+              Hello, {me?.firstName ?? 'Team Member'} 👋
+            </h1>
+            <p className="text-sm text-slate-600 mt-1 max-w-md">
               {geofenceStatus?.applicable
-                ? `Location verified clock-in · ${geofenceStatus.branchName} (within ${Math.round(geofenceStatus.radiusMeters ?? 0)}m)`
-                : 'Your workday at a glance'}
+                ? `Location-verified clocking enabled at ${geofenceStatus.branchName} (within ${Math.round(geofenceStatus.radiusMeters ?? 0)}m).`
+                : 'Welcome to your workforce portal. Track your time and shifts.'}
             </p>
           </div>
+
           <div className="flex flex-col items-stretch gap-3 sm:items-end">
-            <div className="text-center hidden md:block">
-              <p className="text-lg font-bold text-slate-900 tabular-nums" style={{ fontFamily: 'var(--font-mono)' }}>
+            <div className="text-center sm:text-right">
+              <p className="text-2xl font-bold text-slate-900 tabular-nums font-mono">
                 {now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </p>
-              <p className="text-[10px] text-slate-400 mt-0.5">Local time</p>
+              <p className="text-[10px] text-slate-400 uppercase tracking-wider font-mono">Live Clock</p>
             </div>
+
             <button
               onClick={handleClock}
               disabled={clockMutation.isPending || locating}
               className={cn(
-                'px-6 py-3 text-sm font-bold rounded-xl text-white transition-colors shadow-lg focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60 active:scale-95',
+                'px-8 py-3.5 text-sm font-extrabold rounded-2xl text-white transition-all shadow-lg active:scale-95 cursor-pointer disabled:opacity-60 flex items-center justify-center gap-2',
                 isClockedIn
-                  ? 'bg-red-600 hover:bg-red-700 shadow-red-200'
+                  ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-200'
                   : 'bg-brand hover:bg-brand-dark shadow-brand/30',
               )}
             >
-              {locating
-                ? 'Checking your location…'
-                : clockMutation.isPending
-                  ? 'Recording…'
-                  : isClockedIn
-                    ? 'CLOCK OUT'
-                    : 'CLOCK IN'}
+              {locating ? (
+                'Verifying GPS...'
+              ) : clockMutation.isPending ? (
+                'Recording...'
+              ) : isClockedIn ? (
+                <>
+                  <Clock size={16} /> CLOCK OUT
+                </>
+              ) : (
+                <>
+                  <Clock size={16} /> CLOCK IN
+                </>
+              )}
             </button>
-            {clockNotice && <p className="text-sm text-slate-500 text-right">{clockNotice}</p>}
+            {clockNotice && <p className="text-xs text-slate-600 text-right">{clockNotice}</p>}
           </div>
         </CardContent>
       </Card>
 
-      {/* Today's shift */}
-      <div className="bg-sidebar text-white rounded-2xl p-5">
+      {/* Today's Assigned Shift Card */}
+      <div className="bg-sidebar text-white rounded-3xl p-6 shadow-xl border border-sidebar-border">
         <div className="flex items-center justify-between mb-3">
-          <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">TODAY</span>
+          <span className="text-xs font-bold text-slate-400 uppercase tracking-wider font-mono">TODAY&apos;S SHIFT</span>
           {todaysShift ? (
-            <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 text-[10px] font-bold rounded-full uppercase">
-              Active
+            <span className="px-2.5 py-0.5 bg-emerald-500/20 text-emerald-400 text-[10px] font-extrabold rounded-full uppercase border border-emerald-500/30">
+              Assigned
             </span>
-          ) : null}
+          ) : (
+            <span className="px-2.5 py-0.5 bg-slate-800 text-slate-400 text-[10px] font-bold rounded-full uppercase">
+              Day Off
+            </span>
+          )}
         </div>
-        <p className="text-lg font-bold text-white mb-1 font-sans">
-          {todaysShift ? todaysShift.name : 'No shift assigned today'}
-        </p>
+        <h3 className="text-xl font-bold text-white mb-1 font-sans">
+          {todaysShift ? todaysShift.name : 'No shift assigned for today'}
+        </h3>
         {todaysShift ? (
-          <>
-            <p className="text-slate-300 text-sm font-semibold">
+          <div className="space-y-2 mt-3">
+            <p className="text-slate-200 text-sm font-semibold flex items-center gap-2">
+              <Clock size={15} className="text-brand" />
               {formatTime(todaysShift.startAt)} – {formatTime(todaysShift.endAt)}
             </p>
-            <div className="flex items-center gap-1.5 mt-2 text-slate-400 text-xs">
-              <MapPin size={11} />
-              {todaysShift.branch ? todaysShift.branch.name : 'Assigned branch'}
-            </div>
-            <div className="mt-3">
-              <StatusBadge status={todaysShift.status} />
-            </div>
-          </>
+            <p className="text-slate-400 text-xs flex items-center gap-2">
+              <MapPin size={15} className="text-purple-400" />
+              {todaysShift.branch ? todaysShift.branch.name : 'Primary Branch'}
+            </p>
+          </div>
         ) : (
-          <p className="text-slate-300 text-sm">
-            Enjoy your day off. You can request leave or check upcoming shifts below.
+          <p className="text-slate-300 text-xs mt-1">
+            Enjoy your day off! You can submit availability or check upcoming scheduled shifts below.
           </p>
         )}
       </div>
 
+      {/* 4 Personal KPI Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
-          label="Next shifts (7 days)"
+          label="Next Shifts (7 Days)"
           value={(myShifts ?? []).length}
+          sub="Upcoming assigned shifts"
+          icon={<Calendar size={20} />}
+          color="#0284C7"
           href="/schedule"
         />
         <StatCard
-          label="Hours worked today"
+          label="Hours Worked Today"
           value={
             todaysAttendance?.totalWorkedMinutes != null
               ? `${Math.floor(todaysAttendance.totalWorkedMinutes / 60)}h ${todaysAttendance.totalWorkedMinutes % 60}m`
-              : '—'
+              : '0h 00m'
           }
           tone={todaysAttendance ? (isClockedIn ? 'warning' : 'success') : undefined}
+          icon={<Clock size={20} />}
+          color="#16A34A"
+          href="/attendance"
         />
         <StatCard
-          label="Annual leave used"
-          value={totalAllocated > 0 ? `${totalAvailable(totalAllocated, totalRemaining)} used` : '—'}
+          label="Available PTO Leave"
+          value={totalRemaining > 0 ? `${totalRemaining} Days` : `${totalAllocated} Days`}
+          sub="Annual leave balance"
+          icon={<Plane size={20} />}
+          color="#D97706"
           href="/leave"
         />
-        <StatCard label="Today's status" value={todaysAttendance?.status ?? 'No record'} href="/attendance" />
+        <StatCard
+          label="Today's Status"
+          value={isClockedIn ? 'CLOCKED IN' : (todaysAttendance?.status?.toUpperCase() ?? 'OFF DUTY')}
+          sub={isClockedIn ? 'Currently on shift' : 'Not clocked in'}
+          icon={<ShieldCheck size={20} />}
+          color="#7C3AED"
+          href="/attendance"
+        />
       </div>
 
-      {/* Upcoming shifts */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base font-bold text-slate-900 font-sans">Upcoming shifts</CardTitle>
-          <CardDescription>Next 7 days</CardDescription>
+      {/* Upcoming Shifts List */}
+      <Card className="rounded-2xl shadow-sm border-slate-200">
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <div>
+            <CardTitle className="text-base font-bold text-slate-900 font-sans">Upcoming Shifts</CardTitle>
+            <CardDescription>Your schedule for the next 7 days</CardDescription>
+          </div>
+          <Link href="/schedule" className="text-xs font-bold text-brand hover:underline flex items-center gap-1">
+            Full Schedule <ChevronRight size={14} />
+          </Link>
         </CardHeader>
         <CardContent>
           {shiftsLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <p className="text-sm text-slate-400">Loading schedule...</p>
           ) : upcoming.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No upcoming shifts.</p>
+            <p className="text-sm text-slate-500 py-3">No upcoming shifts scheduled.</p>
           ) : (
-            <ul className="space-y-3">
-              {upcoming.map((shift: ShiftDetail) => (
-                <li key={shift.id} className="bg-white rounded-xl border border-slate-200 p-4 flex flex-wrap items-center justify-between gap-2 shift-card">
+            <div className="space-y-3">
+              {upcoming.map((s: ShiftDetail) => (
+                <div key={s.id} className="p-3.5 rounded-xl border border-slate-200 bg-white flex items-center justify-between gap-3 hover:border-slate-300 transition-colors">
                   <div>
-                    <p className="text-sm font-bold text-slate-800">{shift.name}</p>
-                    <p className="text-xs text-slate-400">
-                      {format(parseISO(shift.startAt), 'EEE, MMM d')} · {formatTime(shift.startAt)} –{' '}
-                      {formatTime(shift.endAt)}
+                    <p className="text-sm font-bold text-slate-800">{s.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {format(parseISO(s.startAt), 'EEE, MMM d')} · {formatTime(s.startAt)} – {formatTime(s.endAt)}
                     </p>
                   </div>
-                  <StatusBadge status={shift.status} />
-                </li>
+                  <StatusBadge status={s.status} />
+                </div>
               ))}
-            </ul>
+            </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Quick links */}
+      {/* Self-Service Fast Links */}
       <div className="grid gap-3 sm:grid-cols-3">
-        <Link href="/schedule" className="rounded-xl border border-slate-200 p-4 hover:bg-slate-50 transition-colors">
-          <Calendar size={18} className="text-brand mb-2" />
-          <p className="text-sm font-bold text-slate-800">My Schedule</p>
-          <p className="text-xs text-slate-400">View your shifts</p>
+        <Link href="/schedule" className="rounded-2xl border border-slate-200 p-5 hover:bg-slate-50 transition-all bg-white group shadow-sm">
+          <Calendar size={20} className="text-brand mb-2.5 transition-transform group-hover:scale-110" />
+          <p className="text-sm font-bold text-slate-900">My Schedule</p>
+          <p className="text-xs text-slate-500 mt-0.5">View your shift assignments</p>
         </Link>
-        <Link href="/leave" className="rounded-xl border border-slate-200 p-4 hover:bg-slate-50 transition-colors">
-          <Plane size={18} className="text-brand mb-2" />
-          <p className="text-sm font-bold text-slate-800">Request Leave</p>
-          <p className="text-xs text-slate-400">Plan time off</p>
+        <Link href="/availability" className="rounded-2xl border border-slate-200 p-5 hover:bg-slate-50 transition-all bg-white group shadow-sm">
+          <CalendarClock size={20} className="text-purple-600 mb-2.5 transition-transform group-hover:scale-110" />
+          <p className="text-sm font-bold text-slate-900">Set Availability</p>
+          <p className="text-xs text-slate-500 mt-0.5">Submit weekly preferences</p>
         </Link>
-        <Link href="/attendance" className="rounded-xl border border-slate-200 p-4 hover:bg-slate-50 transition-colors">
-          <Clock size={18} className="text-brand mb-2" />
-          <p className="text-sm font-bold text-slate-800">Attendance</p>
-          <p className="text-xs text-slate-400">Review your time</p>
+        <Link href="/leave" className="rounded-2xl border border-slate-200 p-5 hover:bg-slate-50 transition-all bg-white group shadow-sm">
+          <Plane size={20} className="text-amber-600 mb-2.5 transition-transform group-hover:scale-110" />
+          <p className="text-sm font-bold text-slate-900">Request Leave</p>
+          <p className="text-xs text-slate-500 mt-0.5">Plan time off and view balance</p>
         </Link>
       </div>
     </div>
   );
 }
 
-function totalAvailable(allocated: number, remaining: number): number {
-  return Math.max(0, allocated - remaining);
-}
-
-// ============================================================
-// Manager Dashboard
-// ============================================================
-
-const AVATAR_COLORS = [
-  '#7C3AED',
-  '#2563EB',
-  '#DC2626',
-  '#0891B2',
-  '#059669',
-  '#D97706',
-  '#64748B',
-  '#16A34A',
-];
-
-function colorFor(name: string): string {
-  let hash = 0;
-  for (let i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) % 997;
-  return AVATAR_COLORS[hash % AVATAR_COLORS.length] as string;
-}
-
-interface DashboardAlert {
-  id: string;
-  level: 'danger' | 'warning';
-  text: string;
-  href: Route;
-  action: string;
-}
-
-function ManagerDashboard({ companyName }: { companyName: string }) {
-  const queryClient = useQueryClient();
-  const [reviewError, setReviewError] = useState<string | null>(null);
-  const [dismissed, setDismissed] = useState<string[]>([]);
-  const now = useLiveClock();
-
-  const { data: employees } = useQuery({
-    queryKey: ['employees'],
-    queryFn: () => fetchEmployees({ limit: 100 }),
-    staleTime: 60 * 1000,
-  });
-
-  const { data: me } = useQuery({
-    queryKey: ['myEmployee'],
-    queryFn: fetchMyEmployee,
-    staleTime: 5 * 60 * 1000,
-  });
-
-  const { data: weekShifts } = useQuery({
-    queryKey: ['shifts', todayISO, weekEndISO],
-    queryFn: () => fetchShifts({ startDate: todayISO, endDate: weekEndISO }),
-    staleTime: 60 * 1000,
-  });
-
-  const { data: dailyAttendance } = useQuery({
-    queryKey: ['attendance', 'daily', todayISO],
-    queryFn: () => fetchDailyAttendance(todayISO),
-    staleTime: 60 * 1000,
-  });
-
-  const { data: pendingLeave } = useQuery({
-    queryKey: ['leave', 'pending'],
-    queryFn: () => fetchLeaveRequests({ status: 'pending' }),
-    staleTime: 30 * 1000,
-  });
-
-  const { data: coverage = [] } = useQuery({
-    queryKey: ['coverage', 'week', todayISO, weekEndISO],
-    queryFn: () => fetchCoverage((weekShifts ?? []).map((s) => s.id)),
-    enabled: !!weekShifts && weekShifts.length > 0,
-    staleTime: 60 * 1000,
-  });
-
-  const review = useMutation({
-    mutationFn: ({ id, action }: { id: string; action: 'approve' | 'reject' }) =>
-      reviewLeaveRequest(id, { action }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['leave'] }),
-    onError: (e) => setReviewError(e instanceof Error ? e.message : 'Review failed'),
-  });
-
-  const activeEmployees = (employees?.data ?? []).filter((e) => e.status === 'active').length;
-  const present = (dailyAttendance ?? []).filter((a) =>
-    ['present', 'late'].includes(a.status),
-  ).length;
-  const late = (dailyAttendance ?? []).filter((a) => a.status === 'late').length;
-  const absent = (dailyAttendance ?? []).filter((a) =>
-    ['absent', 'missing_clock_in', 'missing_clock_out'].includes(a.status),
-  ).length;
-  const onShiftToday = present + late;
-
-  const shiftById = useMemo(
-    () => new Map((weekShifts ?? []).map((s) => [s.id, s] as [string, ShiftDetail])),
-    [weekShifts],
-  );
-
-  const todayShifts = (weekShifts ?? []).filter((s) => s.startAt.slice(0, 10) === todayISO);
-  const todayCoverage = coverage.filter((c) => todayShifts.some((s) => s.id === c.shiftId));
-  const filledToday = todayCoverage.reduce((sum, c) => sum + c.headcountFilled, 0);
-  const requiredToday = todayCoverage.reduce((sum, c) => sum + c.headcountRequired, 0);
-
-  const uncovered = coverage.filter((c) => c.shortfall > 0);
-  const unfilledCount = uncovered.length;
-
-  const shiftLabel = (id: string) => shiftById.get(id)?.name ?? 'Shift';
-
-  const alerts: DashboardAlert[] = [];
-  for (const c of uncovered) {
-    if (alerts.length >= 6) break;
-    const required = c.headcountRequired;
-    const filled = c.headcountFilled;
-    alerts.push({
-      id: `coverage-${c.shiftId}`,
-      level: filled === 0 || required - filled >= 2 ? 'danger' : 'warning',
-      text: `${shiftLabel(c.shiftId)} is understaffed — ${filled} of ${required} required`,
-      href: '/schedule',
-      action: 'View Shift',
-    });
+// Helpers
+function extractClockError(err: unknown): string {
+  if (axios.isAxiosError(err)) {
+    const data = err.response?.data as { message?: string | string[] } | undefined;
+    if (data?.message) return Array.isArray(data.message) ? data.message.join(', ') : data.message;
   }
-  if (pendingLeave && pendingLeave.length > 0 && alerts.length < 6) {
-    alerts.push({
-      id: 'pending-leave',
-      level: 'warning',
-      text: `${pendingLeave.length} leave request${pendingLeave.length === 1 ? '' : 's'} awaiting your approval`,
-      href: '/leave',
-      action: 'Review',
-    });
+  return 'Could not record time. Try again.';
+}
+
+function getLocationErrorMessage(err: unknown): string {
+  if (err && typeof err === 'object' && 'code' in err) {
+    const ge = err as GeolocationPositionError;
+    if (ge.code === 1) return 'Location permission denied. Enable location in browser.';
+    if (ge.code === 2) return 'Location unavailable. Try again.';
+    if (ge.code === 3) return 'Location request timed out.';
   }
-  if (late > 0 && alerts.length < 6) {
-    alerts.push({
-      id: 'late-today',
-      level: 'warning',
-      text: `${late} employee${late === 1 ? '' : 's'} clocked in late today`,
-      href: '/attendance',
-      action: 'Attendance',
-    });
-  }
-  const visibleAlerts = alerts.filter((a) => !dismissed.includes(a.id));
-
-  const clockedIn = (dailyAttendance ?? []).filter((a) =>
-    ['present', 'late'].includes(a.status),
-  );
-  const clockedInShown = clockedIn.slice(0, 4);
-  const clockedInExtra = Math.max(0, clockedIn.length - clockedInShown.length);
-
-  const hour = now.getHours();
-  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-  const firstName = me?.firstName;
-  const timeStr = now.toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-  const dangerousCount = visibleAlerts.filter((a) => a.level === 'danger').length;
-
-  return (
-    <div className="space-y-6">
-      {/* ── Today hero banner ─────────────────────────────────────── */}
-      <div className="bg-gradient-to-r from-[#0F172A] via-[#1E293B] to-[#0F172A] border border-[#1E293B] rounded-2xl px-6 py-6">
-        <div className="flex items-center justify-between gap-6 flex-wrap">
-          <div>
-            <p className="text-slate-400 text-xs font-semibold uppercase tracking-widest mb-1">
-              {format(today, 'EEEE, MMMM d')} · {companyName}
-            </p>
-            <h1 className="text-xl font-bold text-white font-sans">
-              {greeting}
-              {firstName ? `, ${firstName}` : ''}
-            </h1>
-            <p className="text-sm text-slate-400 mt-0.5">
-              {dangerousCount > 0
-                ? `${dangerousCount} critical alert${dangerousCount === 1 ? '' : 's'} need your attention.`
-                : 'All coverage levels look healthy today.'}
-            </p>
-          </div>
-
-          <div className="text-center hidden md:block">
-            <p className="text-3xl font-bold text-white tabular-nums" style={{ fontFamily: 'var(--font-mono)' }}>
-              {timeStr}
-            </p>
-            <p className="text-xs text-slate-500 mt-1">Local time</p>
-          </div>
-
-          <div className="flex items-center gap-5">
-            <div>
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Clocked in now</p>
-              <div className="flex items-center">
-                {clockedInShown.length === 0 ? (
-                  <span className="text-xs text-slate-500">No one clocked in yet</span>
-                ) : (
-                  <>
-                    {clockedInShown.map((a, i) => (
-                      <div
-                        key={a.id}
-                        title={`${a.employee.firstName} ${a.employee.lastName}`}
-                        className="w-8 h-8 rounded-full border-2 border-[#1E293B] flex items-center justify-center text-white text-[10px] font-bold"
-                        style={{
-                          background: colorFor(`${a.employee.firstName} ${a.employee.lastName}`),
-                          marginLeft: i === 0 ? 0 : -8,
-                          zIndex: clockedInShown.length - i,
-                        }}
-                      >
-                        {getInitials(`${a.employee.firstName} ${a.employee.lastName}`)}
-                      </div>
-                    ))}
-                    {clockedInExtra > 0 && (
-                      <div
-                        className="w-8 h-8 rounded-full border-2 border-[#1E293B] bg-slate-700 flex items-center justify-center text-slate-400 text-[9px] font-bold"
-                        style={{ marginLeft: -8 }}
-                      >
-                        +{clockedInExtra}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
-
-            {requiredToday > 0 && (
-              <div className="flex items-center gap-3 bg-[#1E293B] border border-[#334155] rounded-xl px-4 py-3">
-                <CoverageRing filled={filledToday} required={requiredToday} />
-                <div>
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Coverage</p>
-                  <p className="text-lg font-bold text-white" style={{ fontFamily: 'var(--font-mono)' }}>
-                    {filledToday} / {requiredToday}
-                  </p>
-                  <p className="text-[10px] text-amber-400">{Math.max(0, requiredToday - filledToday)} not yet in</p>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* ── KPI tiles ─────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          label="Total Employees"
-          value={activeEmployees}
-          icon={<Users size={18} />}
-          color="#3B57E8"
-          sub="active in this workspace"
-          trend="up"
-          href="/workforce"
-        />
-        <StatCard
-          label="On Shift Today"
-          value={onShiftToday}
-          icon={<Calendar size={18} />}
-          color="#16A34A"
-          sub={
-            requiredToday > 0
-              ? `of ${requiredToday} needed for coverage`
-              : 'in attendance today'
-          }
-          href="/attendance"
-        />
-        <StatCard
-          label="Unfilled Shifts"
-          value={unfilledCount}
-          icon={<AlertTriangle size={18} />}
-          color="#DC2626"
-          sub="this week · requires attention"
-          trend="down"
-          href="/schedule"
-        />
-        <StatCard
-          label="Leave Pending"
-          value={pendingLeave?.length ?? 0}
-          icon={<Plane size={18} />}
-          color="#D97706"
-          sub="awaiting your approval"
-          href="/leave"
-        />
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left 2/3 */}
-        <div className="lg:col-span-2 space-y-5">
-          {/* Needs Action */}
-          {visibleAlerts.length > 0 && (
-            <Card className="overflow-hidden rounded-2xl">
-              <div className="px-5 py-4 border-b border-border flex items-center gap-2.5">
-                <div className="w-6 h-6 rounded-lg bg-red-50 flex items-center justify-center">
-                  <Zap size={13} className="text-red-500" />
-                </div>
-                <h2 className="text-sm font-bold text-slate-900 font-sans">Needs Action</h2>
-                <span className="w-5 h-5 bg-red-500 rounded-full text-white text-[10px] font-bold flex items-center justify-center">
-                  {visibleAlerts.length}
-                </span>
-                <Link
-                  href="/schedule"
-                  className="ml-auto text-xs text-brand hover:underline flex items-center gap-1"
-                >
-                  Schedule <ArrowRight size={11} />
-                </Link>
-              </div>
-              <div className="divide-y divide-border">
-                {visibleAlerts.map((a) => (
-                  <div
-                    key={a.id}
-                    className={`px-5 py-3.5 flex items-center gap-3 group ${
-                      a.level === 'danger' ? 'bg-red-50/50' : 'bg-amber-50/40'
-                    }`}
-                  >
-                    <div
-                      className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                        a.level === 'danger' ? 'bg-red-500' : 'bg-amber-500'
-                      }`}
-                    />
-                    <p className="text-sm text-slate-700 flex-1 leading-snug">{a.text}</p>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <Link
-                        href={a.href}
-                        className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors ${
-                          a.level === 'danger'
-                            ? 'bg-red-100 text-red-700 hover:bg-red-200'
-                            : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                        }`}
-                      >
-                        {a.action}
-                      </Link>
-                      <button
-                        onClick={() => setDismissed((d) => [...d, a.id])}
-                        aria-label="Dismiss alert"
-                        className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-slate-500 text-lg leading-none cursor-pointer transition-all"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          )}
-
-          {/* Today's attendance */}
-          <Card className="overflow-hidden rounded-2xl">
-            <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-6 h-6 rounded-lg bg-green-50 flex items-center justify-center">
-                  <CheckCircleIcon />
-                </div>
-                <h2 className="text-sm font-bold text-slate-900 font-sans">Today&apos;s Attendance</h2>
-              </div>
-              <Link href="/attendance" className="text-xs text-brand hover:underline flex items-center gap-1">
-                View all <ArrowRight size={11} />
-              </Link>
-            </div>
-            {(dailyAttendance ?? []).length === 0 ? (
-              <div className="px-5 py-6 text-sm text-slate-500">
-                No attendance records yet today.
-              </div>
-            ) : (
-              <>
-                <div className="divide-y divide-border">
-                  {(dailyAttendance ?? []).slice(0, 6).map((a) => (
-                    <div key={a.id} className="px-5 py-3 flex items-center gap-4 hover:bg-slate-50/60 transition-colors">
-                      <AvatarShell
-                        initials={getInitials(`${a.employee.firstName} ${a.employee.lastName}`)}
-                        color={colorFor(`${a.employee.firstName} ${a.employee.lastName}`)}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold text-slate-800 truncate">
-                          {a.employee.firstName} {a.employee.lastName}
-                        </p>
-                        <p className="text-xs text-slate-400 truncate">
-                          {a.employee.branch?.name ?? '—'} ·{' '}
-                          {formatTime(a.effectiveClockIn ?? a.createdAt)}
-                        </p>
-                      </div>
-                      {a.totalWorkedMinutes > 0 && (
-                        <p className="text-xs font-mono text-slate-500 w-16 text-right">
-                          {formatMinutes(a.totalWorkedMinutes)}
-                        </p>
-                      )}
-                      <StatusBadge status={a.status} />
-                    </div>
-                  ))}
-                </div>
-                <div className="px-5 py-3 bg-slate-50/60 border-t border-border">
-                  <Link
-                    href="/attendance"
-                    className="text-xs text-slate-500 hover:text-brand flex items-center gap-1 transition-colors"
-                  >
-                    View {Math.max(0, (dailyAttendance ?? []).length - 6)} more employees{' '}
-                    <ChevronRight size={12} />
-                  </Link>
-                </div>
-              </>
-            )}
-          </Card>
-        </div>
-
-        {/* Right 1/3 */}
-        <div className="space-y-5">
-          {/* Today's shifts */}
-          <Card className="overflow-hidden rounded-2xl">
-            <div className="px-5 py-4 border-b border-border flex items-center gap-2.5">
-              <div className="w-6 h-6 rounded-lg bg-blue-50 flex items-center justify-center">
-                <Clock size={13} className="text-brand" />
-              </div>
-              <h2 className="text-sm font-bold text-slate-900 font-sans">Today&apos;s Shifts</h2>
-            </div>
-            <div className="p-5">
-              {todayShifts.length === 0 ? (
-                <p className="text-sm text-slate-500">
-                  No shifts scheduled today.{' '}
-                  <Link href="/schedule" className="text-brand hover:underline">
-                    Add a shift
-                  </Link>
-                  .
-                </p>
-              ) : (
-                <div className="relative">
-                  <div className="absolute left-[56px] top-3 bottom-3 w-px bg-slate-100" />
-                  <div className="space-y-4">
-                    {[...todayShifts]
-                      .sort((a, b) => a.startAt.localeCompare(b.startAt))
-                      .slice(0, 6)
-                      .map((s) => {
-                        const assignee = s.assignments[0]?.employee;
-                        return (
-                          <div key={s.id} className="flex items-center gap-0">
-                            <p className="w-14 text-right text-xs font-semibold text-slate-400 pr-3 flex-shrink-0 tabular-nums">
-                              {formatTime(s.startAt)}
-                            </p>
-                            <div className="relative z-10 flex-shrink-0 mx-2">
-                              <div
-                                className={`w-2.5 h-2.5 rounded-full border-2 border-white ${
-                                  s.status === 'published'
-                                    ? 'bg-green-500'
-                                    : s.status === 'draft'
-                                      ? 'bg-slate-300'
-                                      : s.status === 'cancelled'
-                                        ? 'bg-slate-400'
-                                        : 'bg-amber-400'
-                                }`}
-                              />
-                            </div>
-                            <div className="flex-1 flex items-center gap-2 pl-1">
-                              {assignee ? (
-                                <AvatarShell
-                                  initials={getInitials(`${assignee.firstName} ${assignee.lastName}`)}
-                                  color={colorFor(`${assignee.firstName} ${assignee.lastName}`)}
-                                />
-                              ) : (
-                                <div className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-[9px] font-bold text-slate-400 flex-shrink-0">
-                                  —
-                                </div>
-                              )}
-                              <div className="min-w-0">
-                                <p className="text-xs font-semibold text-slate-800 truncate">
-                                  {assignee
-                                    ? `${assignee.firstName} ${assignee.lastName}`
-                                    : 'Unassigned'}
-                                </p>
-                                <p className="text-[10px] text-slate-400 truncate">{s.name}</p>
-                              </div>
-                              <span className="ml-auto">
-                                <StatusBadge status={s.status} />
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="px-5 pb-4">
-              <Link
-                href="/schedule"
-                className="w-full py-2 text-xs font-semibold text-brand hover:bg-brand-light rounded-lg transition-colors flex items-center justify-center gap-1.5"
-              >
-                <PlusIcon /> Add shift <ArrowRight size={11} />
-              </Link>
-            </div>
-          </Card>
-
-          {/* Leave approvals */}
-          <Card className="overflow-hidden rounded-2xl">
-            <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-6 h-6 rounded-lg bg-amber-50 flex items-center justify-center">
-                  <Plane size={13} className="text-amber-600" />
-                </div>
-                <h2 className="text-sm font-bold text-slate-900 font-sans">Leave Requests</h2>
-              </div>
-              <span className="text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-                {pendingLeave?.length ?? 0} pending
-              </span>
-            </div>
-            {reviewError && (
-              <p className="px-5 pt-3 text-xs text-red-600">{reviewError}</p>
-            )}
-            {(pendingLeave ?? []).length === 0 ? (
-              <div className="px-5 py-6 text-sm text-slate-500">No pending requests.</div>
-            ) : (
-              <>
-                <div className="divide-y divide-border">
-                  {(pendingLeave ?? []).slice(0, 4).map((r) => (
-                    <div key={r.id} className="px-4 py-3.5">
-                      <div className="flex items-center gap-3 mb-2.5">
-                        <AvatarShell
-                          initials={getInitials(`${r.employee.firstName} ${r.employee.lastName}`)}
-                          color={colorFor(`${r.employee.firstName} ${r.employee.lastName}`)}
-                        />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-slate-800 truncate">
-                            {r.employee.firstName} {r.employee.lastName}
-                          </p>
-                          <p className="text-xs text-slate-400">
-                            {r.leaveType.name} · {format(parseISO(r.startDate as string), 'MMM d')} –{' '}
-                            {format(parseISO(r.endDate as string), 'MMM d')} ({r.requestedDays}d)
-                          </p>
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        <button
-                          onClick={() => review.mutate({ id: r.id, action: 'approve' })}
-                          disabled={review.isPending}
-                          className="py-1.5 text-xs font-semibold bg-green-50 text-green-700 border border-green-200 rounded-lg hover:bg-green-100 cursor-pointer transition-colors disabled:opacity-60"
-                        >
-                          Approve
-                        </button>
-                        <button
-                          onClick={() => review.mutate({ id: r.id, action: 'reject' })}
-                          disabled={review.isPending}
-                          className="py-1.5 text-xs font-semibold bg-slate-50 text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-100 cursor-pointer transition-colors disabled:opacity-60"
-                        >
-                          Decline
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div className="px-5 py-3 bg-slate-50/60 border-t border-border">
-                  <Link
-                    href="/leave"
-                    className="text-xs text-brand hover:underline flex items-center gap-1"
-                  >
-                    View all leave requests <ChevronRight size={12} />
-                  </Link>
-                </div>
-              </>
-            )}
-          </Card>
-
-          {/* Quick actions */}
-          <Card className="rounded-2xl p-5">
-            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Quick Actions</h2>
-            <div className="space-y-1.5">
-              {[
-                { label: 'Add a shift', icon: <Calendar size={14} />, href: '/schedule' as Route, color: '#3B57E8' },
-                { label: 'Generate schedule', icon: <Zap size={14} />, href: '/schedule' as Route, color: '#7C3AED' },
-                { label: 'View organization', icon: <Users size={14} />, href: '/organization' as Route, color: '#0891B2' },
-                { label: 'Audit log', icon: <Shield size={14} />, href: '/activities' as Route, color: '#64748B' },
-              ].map((q) => (
-                <Link
-                  key={q.label}
-                  href={q.href}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-slate-50 group transition-colors cursor-pointer text-left"
-                >
-                  <div
-                    className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-                    style={{ background: `${q.color}18`, color: q.color }}
-                  >
-                    {q.icon}
-                  </div>
-                  <span className="text-sm font-medium text-slate-700 group-hover:text-slate-900 transition-colors flex-1">
-                    {q.label}
-                  </span>
-                  <ChevronRight size={14} className="text-slate-300 group-hover:text-slate-500 transition-colors" />
-                </Link>
-              ))}
-            </div>
-          </Card>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AvatarShell({ initials, color }: { initials: string; color: string }) {
-  return (
-    <Avatar initials={initials} color={color} size="sm" className="w-8 h-8 text-[10px]" />
-  );
-}
-
-function CheckCircleIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-600">
-      <path d="M21.801 10A10 10 0 1 1 17 3.335" />
-      <path d="m9 11 3 3L22 4" />
-    </svg>
-  );
-}
-
-function PlusIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M5 12h14" />
-      <path d="M12 5v14" />
-    </svg>
-  );
-}
-
-function formatMinutes(minutes: number): string {
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return `${h}h ${m}m`;
+  return 'Location error occurred.';
 }
 
 function getCurrentPosition(): Promise<GeolocationPosition> {
   return new Promise((resolve, reject) => {
-    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
-      reject(new Error('Geolocation is not supported by this browser.'));
+    if (!('geolocation' in navigator)) {
+      reject(new Error('Geolocation not supported'));
       return;
     }
     navigator.geolocation.getCurrentPosition(resolve, reject, {
@@ -1090,36 +1193,4 @@ function getCurrentPosition(): Promise<GeolocationPosition> {
       maximumAge: 0,
     });
   });
-}
-
-function getLocationErrorMessage(error: unknown): string {
-  if (error instanceof GeolocationPositionError) {
-    switch (error.code) {
-      case error.PERMISSION_DENIED:
-        return 'Location access was denied. Allow location to clock in at this branch.';
-      case error.POSITION_UNAVAILABLE:
-        return 'Your location could not be determined right now.';
-      case error.TIMEOUT:
-        return 'Location request timed out. Try again.';
-      default:
-        return 'Unable to determine your location.';
-    }
-  }
-  return error instanceof Error ? error.message : 'Unable to determine your location.';
-}
-
-interface ClockErrorBody {
-  message?: string;
-  errors?: Array<{ code?: string; message?: string }>;
-}
-
-function extractClockError(error: unknown): string {
-  const ax = error as AxiosError<ClockErrorBody>;
-  const data = ax?.response?.data;
-  const first = data?.errors?.[0];
-  if (first?.code === 'GEOFENCE_OUTSIDE') {
-    return first.message ?? data?.message ?? 'You are outside the allowed clock-in area.';
-  }
-  if (axios.isAxiosError(error) && data?.message) return data.message;
-  return 'Unable to record time. Try again.';
 }

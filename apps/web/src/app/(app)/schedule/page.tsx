@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -63,7 +63,7 @@ import {
   type SuggestedAssignment,
   type SwapRequestRow,
 } from '@/lib/api/queries';
-import { getAuthUser, hasRole } from '@/lib/auth';
+import { getAuthUser, getPersonaInfo, hasRole } from '@/lib/auth';
 import { formatTime, getInitials } from '@/lib/utils';
 import { format, parseISO } from 'date-fns';
 
@@ -100,7 +100,11 @@ const EXCLUSION_LABELS: Record<string, string> = {
 
 export default function SchedulePage() {
   const queryClient = useQueryClient();
-  const canReview = hasRole(getAuthUser(), ['admin', 'manager', 'shift_manager']);
+  const user = getAuthUser();
+  const persona = getPersonaInfo(user);
+  const isManagerOrOwner = persona.role === 'OWNER' || persona.role === 'MANAGER';
+  const isSupervisor = persona.role === 'SUPERVISOR';
+  const canReview = isManagerOrOwner || isSupervisor;
 
   const { data: shifts, isLoading } = useQuery({
     queryKey: ['shifts'],
@@ -174,8 +178,14 @@ export default function SchedulePage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-4">
           <div>
-            <h1 className="text-xl font-bold text-slate-900 font-sans">Schedule</h1>
-            <p className="text-sm text-slate-500 mt-0.5">{(shifts ?? []).length} shifts · create, assign, and track</p>
+            <h1 className="text-xl font-bold text-slate-900 font-sans">
+              {persona.role === 'EMPLOYEE' ? 'My Shift Schedule' : 'Schedule Matrix & Rostering'}
+            </h1>
+            <p className="text-sm text-slate-500 mt-0.5">
+              {persona.role === 'EMPLOYEE'
+                ? 'Your upcoming shift assignments and open shift marketplace'
+                : `${(shifts ?? []).length} shifts · create, AI auto-assign, publish, and track`}
+            </p>
           </div>
           <div className="hidden md:flex items-center gap-1 bg-slate-100 rounded-lg p-1">
             <button
@@ -239,21 +249,25 @@ export default function SchedulePage() {
               ))}
             </select>
           ) : null}
-          <Button variant="secondary" size="sm" onClick={() => setShowSchedules(true)} className="gap-2">
-            <Calendar size={14} className="text-brand" />
-            Schedules
-          </Button>
-          <button
-            onClick={() => setShowGenerate(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-brand/90 text-white text-sm font-semibold rounded-lg hover:from-violet-700 hover:to-brand transition cursor-pointer"
-          >
-            <Sparkles size={14} /> AI Generate
-          </button>
+          {isManagerOrOwner && (
+            <>
+              <Button variant="secondary" size="sm" onClick={() => setShowSchedules(true)} className="gap-2">
+                <Calendar size={14} className="text-brand" />
+                Schedules
+              </Button>
+              <button
+                onClick={() => setShowGenerate(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-brand/90 text-white text-sm font-semibold rounded-lg hover:from-violet-700 hover:to-brand transition cursor-pointer shadow-sm"
+              >
+                <Sparkles size={14} /> AI Generate
+              </button>
+            </>
+          )}
           {canReview && (
             <>
               <Button variant="secondary" size="sm" onClick={() => setShowOpenRequests(true)} className="gap-2">
                 <Inbox size={14} className="text-brand" />
-                Open shift requests
+                Open shifts
               </Button>
               <Button variant="secondary" size="sm" onClick={() => setShowSwapRequests(true)} className="gap-2">
                 <RefreshCw size={14} className="text-brand" />
@@ -261,10 +275,18 @@ export default function SchedulePage() {
               </Button>
             </>
           )}
-          <Button variant="primary" size="sm" onClick={() => setShowCreate(true)} className="gap-2">
-            <Plus size={14} />
-            Add Shift
-          </Button>
+          {canReview && (
+            <Button variant="primary" size="sm" onClick={() => setShowCreate(true)} className="gap-2">
+              <Plus size={14} />
+              Add Shift
+            </Button>
+          )}
+          {persona.role === 'EMPLOYEE' && (
+            <Button variant="secondary" size="sm" onClick={() => setShowOpenRequests(true)} className="gap-2">
+              <Inbox size={14} className="text-brand" />
+              Claim Open Shift
+            </Button>
+          )}
         </div>
       </div>
 

@@ -30,7 +30,7 @@ import {
   type AvailabilityExceptionDetail,
   type AvailabilityRuleDetail,
 } from '@/lib/api/queries';
-import { getAuthUser } from '@/lib/auth';
+import { getAuthUser, getPersonaInfo } from '@/lib/auth';
 import { format, parseISO } from 'date-fns';
 
 const inputClass =
@@ -54,14 +54,12 @@ function toISODate(d: Date): string {
 export default function AvailabilityPage() {
   const queryClient = useQueryClient();
   const user = getAuthUser();
-  const isManager = useMemo(() => {
-    if (!user) return false;
-    const roles = user.roles.map((r) => r.toLowerCase());
-    return roles.some((r) => ['owner', 'admin', 'manager'].includes(r));
-  }, [user]);
+  const persona = getPersonaInfo(user);
+  const isManager = persona.role === 'OWNER' || persona.role === 'MANAGER' || persona.role === 'SUPERVISOR';
 
   const { data: me } = useQuery({ queryKey: ['myEmployee'], queryFn: fetchMyEmployee });
   const myEmployeeId = me?.id;
+
 
   const { data: employees } = useQuery({
     queryKey: ['employees'],

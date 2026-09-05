@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useQuery } from '@tanstack/react-query';
 import { ClipboardCheck, Users, Clock, AlertTriangle, ShieldCheck } from 'lucide-react';
@@ -17,7 +17,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { fetchDailyAttendance, fetchEmployeeAttendance, fetchMyEmployee, fetchPresenceVerifications } from '@/lib/api/queries';
-import { getAuthUser } from '@/lib/auth';
+import { getAuthUser, getPersonaInfo, getPrimaryRole } from '@/lib/auth';
 import { cn, formatTime, getInitials } from '@/lib/utils';
 import { format, parseISO } from 'date-fns';
 
@@ -47,16 +47,16 @@ const STATUS_ROW_BG: Record<string, string> = {
 };
 
 export default function AttendancePage() {
-  const [selectedDate, setSelectedDate] = useState(toLocalDateInput(new Date()));
-  const [managerView, setManagerView] = useState<ManagerView>('attendance');
   const user = getAuthUser();
-  const isManager = useMemo(() => {
-    if (!user) return false;
-    const roles = user.roles.map((r) => r.toLowerCase());
-    return roles.some((r) => ['owner', 'admin', 'manager', 'shift_manager'].includes(r));
-  }, [user]);
+  const persona = getPersonaInfo(user);
+  const isManager = persona.role === 'OWNER' || persona.role === 'MANAGER' || persona.role === 'SUPERVISOR';
+  const defaultTab: ManagerView = persona.role === 'SUPERVISOR' ? 'presence' : 'attendance';
+
+  const [selectedDate, setSelectedDate] = useState(toLocalDateInput(new Date()));
+  const [managerView, setManagerView] = useState<ManagerView>(defaultTab);
 
   const { data: me } = useQuery({ queryKey: ['myEmployee'], queryFn: fetchMyEmployee });
+
 
   const { data: daily, isLoading } = useQuery({
     queryKey: ['attendance', 'daily', selectedDate],
@@ -91,8 +91,16 @@ export default function AttendancePage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <PageHeader
-          title="Attendance"
-          subtitle={isManager ? 'Company-wide daily overview' : 'Your time and attendance'}
+          title="Attendance & Time Records"
+          subtitle={
+            persona.role === 'SUPERVISOR'
+              ? 'Floor presence radar and live geofence verification stream'
+              : persona.role === 'OWNER'
+                ? 'Company-wide attendance and labor hours audit'
+                : persona.role === 'MANAGER'
+                  ? 'Daily department attendance and timesheet management'
+                  : 'Your personal time card and hours worked'
+          }
         />
         <input
           type="date"

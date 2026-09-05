@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { UmbrellaOff } from 'lucide-react';
@@ -25,7 +25,7 @@ import {
   fetchMyEmployee,
   reviewLeaveRequest,
 } from '@/lib/api/queries';
-import { getAuthUser } from '@/lib/auth';
+import { getAuthUser, getPersonaInfo } from '@/lib/auth';
 import { format, parseISO } from 'date-fns';
 
 const inputClass =
@@ -42,11 +42,9 @@ function dayDiff(start: string, end: string): number {
 export default function LeavePage() {
   const queryClient = useQueryClient();
   const user = getAuthUser();
-  const isManager = useMemo(() => {
-    if (!user) return false;
-    const roles = user.roles.map((r) => r.toLowerCase());
-    return roles.some((r) => ['owner', 'admin', 'manager'].includes(r));
-  }, [user]);
+  const persona = getPersonaInfo(user);
+  const isManager = persona.role === 'OWNER' || persona.role === 'MANAGER' || persona.role === 'SUPERVISOR';
+
 
   const { data: me } = useQuery({ queryKey: ['myEmployee'], queryFn: fetchMyEmployee });
   const myEmployeeId = me?.id;

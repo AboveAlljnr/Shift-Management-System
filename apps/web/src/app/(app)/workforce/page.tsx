@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -1049,7 +1049,7 @@ function QualificationsModal({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const canEdit = hasRole(getAuthUser(), ['admin', 'manager']);
+  const canEdit = hasRole(getAuthUser(), ['admin', 'manager', 'owner']);
 
   const { data: quals, isLoading: qualsLoading } = useQuery({
     queryKey: ['employeeQualifications', employee.id],
