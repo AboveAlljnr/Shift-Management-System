@@ -335,13 +335,21 @@ export class AttendanceService {
     });
   }
 
+  private normalizeWorkDate(raw?: string): Date {
+    // Date-only strings parse as UTC midnight; a missing or malformed value
+    // falls back to the current UTC day instead of Prisma's Invalid Date error.
+    const d = raw ? new Date(raw) : new Date();
+    if (Number.isNaN(d.getTime())) return new Date(new Date().toISOString().slice(0, 10));
+    return new Date(d.toISOString().slice(0, 10));
+  }
+
   async findDailyRecords(
     companyId: string,
     date: string,
     branchId?: string,
     membershipId?: string,
   ) {
-    const workDate = new Date(date);
+    const workDate = this.normalizeWorkDate(date);
 
     // ADR-003 query scope: the caller's granted scope (via the `employee`
     // relation) AND-composes with any branchId filter; both narrow, neither
@@ -403,8 +411,8 @@ export class AttendanceService {
 
     if (startDate || endDate) {
       where.workDate = {};
-      if (startDate) where.workDate.gte = new Date(startDate);
-      if (endDate) where.workDate.lte = new Date(endDate);
+      if (startDate) where.workDate.gte = this.normalizeWorkDate(startDate);
+      if (endDate) where.workDate.lte = this.normalizeWorkDate(endDate);
     }
 
     return this.prisma.attendanceRecord.findMany({

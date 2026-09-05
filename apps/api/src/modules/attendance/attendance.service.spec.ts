@@ -916,3 +916,32 @@ describe('AttendanceService — manager presence verification list', () => {
     expect(queryWhere).toMatchObject({ companyId: 'c1', status: { in: ['MISSED'] }, employee: { branchId: 'b1' } });
   });
 });
+
+describe('AttendanceService — daily records date normalization', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('defaults a missing date to the current UTC day', async () => {
+    const deps = createDeps();
+    deps.attendanceRecord.findMany.mockResolvedValue([]);
+
+    const service = new AttendanceService(deps.prisma, companyWideScopeFilter(), geofenceSvc, auditSvc, notificationsSvc);
+    await service.findDailyRecords('c1', undefined as never);
+
+    const queryWhere = deps.attendanceRecord.findMany.mock.calls.at(-1)?.[0]?.where;
+    const expected = new Date(new Date().toISOString().slice(0, 10));
+    expect(queryWhere.workDate.getTime()).toBe(expected.getTime());
+  });
+
+  it('normalizes an explicit date and falls back to today on malformed input', async () => {
+    const deps = createDeps();
+    deps.attendanceRecord.findMany.mockResolvedValue([]);
+
+    const service = new AttendanceService(deps.prisma, companyWideScopeFilter(), geofenceSvc, auditSvc, notificationsSvc);
+    await service.findDailyRecords('c1', 'not-a-date');
+
+    const queryWhere = deps.attendanceRecord.findMany.mock.calls.at(-1)?.[0]?.where;
+    const expected = new Date(new Date().toISOString().slice(0, 10));
+    expect(queryWhere.workDate.getTime()).toBe(expected.getTime());
+    expect(Number.isNaN(queryWhere.workDate.getTime())).toBe(false);
+  });
+});

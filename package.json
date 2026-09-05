@@ -12,6 +12,7 @@
     "type-check": "turbo run type-check",
     "db:generate": "pnpm --filter @sms/api exec prisma generate",
     "db:migrate": "pnpm --filter @sms/api exec prisma migrate dev",
+    "db:reset": "pnpm --filter @sms/api exec prisma migrate reset --force",
     "db:seed": "pnpm --filter @sms/api exec prisma db seed",
     "db:studio": "pnpm --filter @sms/api exec prisma studio",
     "clean": "turbo run clean && rm -rf node_modules"
