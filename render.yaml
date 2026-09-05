@@ -58,13 +58,19 @@ services:
           name: sms-redis
           property: connectionString
       - key: OPTIMIZER_URL
-        sync: false
+        fromService:
+          type: web
+          name: sms-optimizer
+          envVarKey: RENDER_EXTERNAL_URL
       - key: JWT_ACCESS_SECRET
         generateValue: true
       - key: JWT_REFRESH_SECRET
         generateValue: true
       - key: ALLOWED_ORIGINS
-        sync: false
+        fromService:
+          type: web
+          name: sms-web
+          envVarKey: RENDER_EXTERNAL_URL
 
   # ============================================================
   # 4. NEXT.JS WEB FRONTEND (Interactive UI)
@@ -81,4 +87,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: NEXT_PUBLIC_API_URL
-        sync: false
+        fromService:
+          type: web
+          name: sms-api
+          envVarKey: RENDER_EXTERNAL_URL
