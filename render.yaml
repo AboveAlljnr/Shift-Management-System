@@ -1,0 +1,84 @@
+version: "1"
+
+databases:
+  - name: sms-postgres
+    databaseName: sms_production
+    user: sms_user
+    plan: free
+    region: oregon
+    postgresMajorVersion: "16"
+
+services:
+  # ============================================================
+  # 1. KEY VALUE / REDIS (Cache & BullMQ Store)
+  # ============================================================
+  - type: keyvalue
+    name: sms-redis
+    plan: free
+    region: oregon
+    maxmemoryPolicy: noeviction
+    ipAllowList: []
+
+  # ============================================================
+  # 2. PYTHON OPTIMIZER (Google OR-Tools CP-SAT Solver)
+  # ============================================================
+  - type: web
+    name: sms-optimizer
+    runtime: python
+    plan: free
+    region: oregon
+    rootDir: services/optimizer
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+
+  # ============================================================
+  # 3. NESTJS REST API (Core Modular Monolith)
+  # ============================================================
+  - type: web
+    name: sms-api
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @sms/shared build && pnpm --filter @sms/api exec prisma generate && pnpm --filter @sms/api build
+    startCommand: pnpm --filter @sms/api exec prisma migrate deploy && node apps/api/dist/main
+    healthCheckPath: /api/v1/health/live
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: APP_PORT
+        value: 10000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sms-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: sms-redis
+          property: connectionString
+      - key: OPTIMIZER_URL
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+  # ============================================================
+  # 4. NEXT.JS WEB FRONTEND (Interactive UI)
+  # ============================================================
+  - type: web
+    name: sms-web
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @sms/shared build && pnpm --filter @sms/web build
+    startCommand: node apps/web/.next/standalone/apps/web/server.js
+    healthCheckPath: /login
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_API_URL
+        sync: false
